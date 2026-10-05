@@ -392,7 +392,7 @@ func RunAPI(ctx context.Context, cfg *config.Config) error {
 		Provider: cfg.GitProvider, UploadMaxBytes: cfg.UploadMaxBytes, UploadTypes: cfg.UploadAllowedTypes,
 		ImportMaxBytes: cfg.ImportMaxBytes, Languages: domain.Languages, DefaultLanguage: cfg.DefaultLanguage, DefaultBranch: branch,
 		BootstrapAdminsConfigured: len(cfg.BootstrapAdmins) > 0,
-		Login:                     auth.LoginInfo{Kind: c.authSvc.LoginProvider().Kind(), Label: c.authSvc.LoginProvider().Label(), Org: cfg.GitHubAllowedOrg},
+		Login:                     loginInfo(cfg, c.authSvc),
 		Agent:                     agentInfo(cfg),
 	}, strings.HasPrefix(cfg.PublicAPIURL, "https://")).WithWeb(webRedirectBase(cfg), cfg.CookieDomain)
 
@@ -472,6 +472,12 @@ func RunAPI(ctx context.Context, cfg *config.Config) error {
 		g.Go(func() error { chatSvc.Run(gctx); return nil })
 	}
 	return g.Wait()
+}
+
+// loginInfo is the sign-in block of /api/v1/config (FTR.HMR.CMN-0006 R1, R2).
+func loginInfo(cfg *config.Config, svc *auth.Service) auth.LoginInfo {
+	lp := svc.LoginProvider()
+	return auth.LoginInfo{Kind: lp.Kind(), Label: lp.Label(), Org: cfg.GitHubAllowedOrg, LinksGit: svc.GitIsLogin()}
 }
 
 // agentInfo is the agent block of /api/v1/config (tech §3.1).

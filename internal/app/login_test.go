@@ -59,3 +59,21 @@ func TestLoginProvider(t *testing.T) {
 		t.Fatal("the legacy sign-in links the git account")
 	}
 }
+
+// The sign-in block of /api/v1/config tells whether the git account is the
+// sign-in account (the interface hides "Unlink" then).
+func TestLoginInfo(t *testing.T) {
+	cfg := &config.Config{AuthProvider: "github", GitProvider: "github", GitBaseURL: "https://github.com",
+		GitHubClientID: "app", GitHubSecret: "apps", GitHubAllowedOrg: "GreenOnGrey"}
+	gh := git.NewGitHub("https://github.com", "https://github.com", "o/r", "app", "apps")
+	svc := auth.NewService(nil, gh, nil, "https://api.x", nil, "en")
+	svc.SetLogin(loginProvider(cfg, gh), gitAPIURL(cfg))
+	if li := loginInfo(cfg, svc); li.Kind != "github" || !li.LinksGit || li.Org != "GreenOnGrey" {
+		t.Fatalf("%+v", li)
+	}
+	cfg.GitHubLoginClientID, cfg.GitHubLoginClientSecret = "login", "s"
+	svc.SetLogin(loginProvider(cfg, gh), gitAPIURL(cfg))
+	if li := loginInfo(cfg, svc); li.LinksGit {
+		t.Fatalf("a separate sign-in app does not link the git account: %+v", li)
+	}
+}
