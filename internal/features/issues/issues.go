@@ -57,6 +57,9 @@ type CreateInput struct {
 	Title         string           `json:"title"`
 	Description   string           `json:"description"`
 	AttachmentIDs []uuid.UUID      `json:"attachmentIds"`
+	// ViaNabu marks an issue the personal agent of Nabu created on behalf of
+	// the user (FTR.HMR.CMN-0006 tech §3.6: history "via the Nabu agent").
+	ViaNabu bool `json:"-"`
 }
 
 func (s *Service) cd() *cycledata.DB { return cycledata.New(s.store.Q()) }
@@ -66,7 +69,8 @@ func (s *Service) publish(ctx context.Context, key string, st domain.IssueStatus
 	s.events.Publish(ctx, events.Event{Type: events.FocusChanged, Data: map[string]any{"key": key}})
 }
 
-// Create creates an issue; any user may create one (R1). Discovery starts at once (R4).
+// Create creates an issue; any user may create one (R1). Discovery starts at once (R4);
+// without the agent the issue goes straight to verification (FTR.HMR.CMN-0006 R9).
 func (s *Service) Create(ctx context.Context, p *domain.Principal, in CreateInput) (*cycledata.Issue, error) {
 	if in.Type != domain.IssueIdea && in.Type != domain.IssueProblem {
 		return nil, apperr.Unprocessable("invalid_type", "type must be idea or problem")
@@ -105,7 +109,11 @@ func (s *Service) Create(ctx context.Context, p *domain.Principal, in CreateInpu
 				return apperr.Unprocessable("invalid_attachment", err.Error())
 			}
 		}
-		if err := cd.AddActivity(ctx, "issue", is.ID, "created", &p.UserID, false, nil); err != nil {
+		var via map[string]any
+		if in.ViaNabu {
+			via = map[string]any{"via": "nabu"}
+		}
+		if err := cd.AddActivity(ctx, "issue", is.ID, "created", &p.UserID, in.ViaNabu, via); err != nil {
 			return err
 		}
 		if err := discovery.Start(ctx, tx.Q(), is.ID, nil); err != nil {
@@ -116,6 +124,9 @@ func (s *Service) Create(ctx context.Context, p *domain.Principal, in CreateInpu
 	})
 	if err != nil {
 		return nil, err
+	}
+	if domain.AgentDisabled() {
+		created.Status = domain.IssueVerification
 	}
 	s.publish(ctx, created.Key, created.Status)
 	return created, nil
@@ -209,7 +220,7 @@ func (s *Service) Get(ctx context.Context, p *domain.Principal, key string) (*Ca
 	c.Permissions = Permissions{
 		Verify:   expert && is.Status == domain.IssueVerification,
 		Reopen:   expert && is.Status == domain.IssueRejected,
-		Discover: expert && (is.Status == domain.IssueNew || is.Status == domain.IssueDiscovery),
+		Discover: expert && !domain.AgentDisabled() && (is.Status == domain.IssueNew || is.Status == domain.IssueDiscovery),
 	}
 	return c, nil
 }
@@ -403,6 +414,9 @@ func (s *Service) Reopen(ctx context.Context, p *domain.Principal, key string) e
 
 // Rediscover restarts Discovery (after a failure or to refresh it).
 func (s *Service) Rediscover(ctx context.Context, p *domain.Principal, key string) error {
+	if domain.AgentDisabled() {
+		return apperr.AgentDisabled()
+	}
 	is, err := s.loadForAction(ctx, p, key)
 	if err != nil {
 		return err

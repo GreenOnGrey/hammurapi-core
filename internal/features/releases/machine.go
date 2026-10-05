@@ -355,6 +355,9 @@ func (m Machine) Step(ctx context.Context, tx pgx.Tx, run *workflows.Run, evs []
 					}
 				case "needs_update":
 					if p.PRID == pr.ID {
+						if domain.AgentDisabled() {
+							return block(fmt.Sprintf("the agent is not connected: update the PR of %s by hand (%s)", svc.Key, p.Reason), stepMerge)
+						}
 						initiator, _ := uuid.Parse(v.Initiator)
 						if _, err := codegen.StartTask(ctx, tx, codegen.TaskSpec{Type: codegen.TaskUpdatePR, FeatureID: &rel.FeatureID, ReleaseID: &rel.ID,
 							ServiceID: svc.ID, Initiator: &initiator, Input: codegen.TaskInput{PRNumber: pr.Number, Release: rel.Key, Reason: p.Reason},

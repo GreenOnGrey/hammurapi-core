@@ -430,6 +430,9 @@ func RecordTransition(area domain.Area, to string) {
 // for domains without approval and after a failed generation. A comment from
 // the chat is passed to the agent (GEN-04).
 func (s *Service) Regenerate(ctx context.Context, p *domain.Principal, uniqueID string, area domain.Area, comment string) error {
+	if domain.AgentDisabled() {
+		return apperr.AgentDisabled()
+	}
 	if !area.Generated() {
 		return apperr.Unprocessable("not_generated", "only tech and qa are generated")
 	}

@@ -33,6 +33,9 @@ const (
 	ModeGenerate  = "generate"  // worker: generation of tech and qa
 	ModeCheck     = "check"     // worker: code vs specification check
 	ModeTask      = "task"      // runner: code generation task
+	// ModeNabu: the personal agent of the user in Nabu calls Hammurapi on
+	// behalf of the user (FTR.HMR.CMN-0006 R7).
+	ModeNabu = "nabu"
 )
 
 // Grant is the permission scope of an MCP token.
@@ -163,6 +166,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if !ok {
 		http.Error(w, "invalid token", http.StatusUnauthorized)
+		return
+	}
+	s.Serve(w, r, g)
+}
+
+// Serve handles one MCP request with a grant the caller has already
+// authenticated (calls from Nabu, FTR.HMR.CMN-0006 tech §3.6).
+func (s *Server) Serve(w http.ResponseWriter, r *http.Request, g Grant) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 8<<20))

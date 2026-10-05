@@ -47,6 +47,13 @@ func NewGitHub(baseURL, oauthURL, repo, clientID, clientSecret string) *GitHub {
 
 func (g *GitHub) Name() string { return "github" }
 
+// WithScopes sets the OAuth scopes (an OAuth App needs them; a GitHub App
+// ignores them and uses its permissions).
+func (g *GitHub) WithScopes(scopes ...string) *GitHub {
+	g.oauth.Scopes = scopes
+	return g
+}
+
 func (g *GitHub) r(p string) string { return "/repos/" + g.repo + p }
 
 func (g *GitHub) AuthCodeURL(state, redirectURL string) string {

@@ -37,6 +37,9 @@ type ValidationStarter func(ctx context.Context, q postgres.Querier, featureID u
 // Start starts code generation of a feature: mode "implement" (first run or
 // after a return to the specification) or "rework" (return to code, R24).
 func Start(ctx context.Context, q postgres.Querier, featureID uuid.UUID, initiator uuid.UUID, mode, comment string) error {
+	if domain.AgentDisabled() {
+		return apperr.AgentDisabled()
+	}
 	_, err := workflows.Start(ctx, q, Kind, featureID, nil, "planning", map[string]any{"initiator": initiator.String(), "mode": mode, "comment": comment})
 	if errors.Is(err, workflows.ErrActiveRun) {
 		return apperr.Conflict("codegen_in_progress", "code generation is already running")
@@ -224,6 +227,9 @@ func (s *Service) plan(ctx context.Context, cd *cycledata.DB, featureID uuid.UUI
 
 // StartCodegen is POST /features/{key}/codegen (R16).
 func (s *Service) StartCodegen(ctx context.Context, p *domain.Principal, key string) (*Plan, error) {
+	if domain.AgentDisabled() {
+		return nil, apperr.AgentDisabled()
+	}
 	f, err := features.Load(ctx, s.store, key)
 	if err != nil {
 		return nil, err
@@ -418,7 +424,7 @@ func (s *Service) RetryTask(ctx context.Context, p *domain.Principal, key string
 // ReviewComment starts an address_review task for a review comment on an
 // agent PR (R18), unless one is already queued for the PR.
 func (s *Service) ReviewComment(ctx context.Context, pr *cycledata.PR, body, author string) error {
-	if pr.ServiceID == nil {
+	if pr.ServiceID == nil || domain.AgentDisabled() {
 		return nil
 	}
 	return s.store.InTx(ctx, func(tx specdata.Store) error {

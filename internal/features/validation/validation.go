@@ -716,7 +716,7 @@ func (e *Effects) Check(ctx context.Context, _ workflows.RunRef, payload json.Ra
 		agentrun.System, b.String())
 	e.Runner.Record(ctx, agent.ScenarioConformanceCheck, out, agentcfg.UsageRecord{Context: "check", FeatureID: &f.ID})
 	if err != nil {
-		if errors.Is(err, agentrun.ErrNoAgent) {
+		if agentrun.IsNoAgent(err) {
 			return nil, nil
 		}
 		return nil, err

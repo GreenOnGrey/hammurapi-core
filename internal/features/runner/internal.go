@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -31,6 +32,7 @@ import (
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/httpx"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/mcp"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/metrics"
+	"github.com/GreenOnGrey/hammurapi-core/internal/platform/nabu"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/postgres"
 	"github.com/GreenOnGrey/hammurapi-core/internal/specdata"
 )
@@ -57,6 +59,9 @@ type Description struct {
 	TimeoutSeconds int                     `json:"timeoutSeconds"`
 	TokenLimit     int64                   `json:"tokenLimit"`
 	MCPURL         string                  `json:"mcpUrl"`
+	// AgentBackend is "nabu" when a service agent of Nabu performs the task
+	// (FTR.HMR.CMN-0006 R8), otherwise "operator".
+	AgentBackend string `json:"agentBackend"`
 }
 
 // Result is POST /internal/v1/tasks/{id}/result.
@@ -101,6 +106,25 @@ type Internal struct {
 	Config   AgentConfig
 	// AgentURL is the operator's address as runner pods reach it.
 	AgentURL string
+
+	// FTR.HMR.CMN-0006: tasks whose scenario is bound to a service agent of
+	// Nabu run there; the runner serves the tools over the relay of Nabu.
+	Nabu         *nabu.Client
+	NabuBindings interface {
+		AgentFor(ctx context.Context, sc agent.Scenario) string
+	}
+	// NabuMCPURL is this server's /mcp as Nabu reaches it (callerMcp).
+	NabuMCPURL string
+	// UserEmail returns the email of the initiator for Nabu ("" — none).
+	UserEmail func(ctx context.Context, id uuid.UUID) string
+}
+
+// nabuAgent is the service agent of Nabu bound to the task's scenario.
+func (s *Internal) nabuAgent(ctx context.Context, t *cycledata.Task) string {
+	if s.Nabu == nil || s.NabuBindings == nil {
+		return ""
+	}
+	return s.NabuBindings.AgentFor(ctx, ScenarioOf(t.Type))
 }
 
 // AgentOperator opens sessions in the operator with the service token.
@@ -206,6 +230,7 @@ func (s *Internal) Routes(r chi.Router) {
 		}))
 		r.Post("/result", httpx.Handler(s.result))
 		r.Post("/agent-session", httpx.Handler(s.agentSession))
+		r.Post("/agent-run", httpx.Handler(s.agentRun))
 	})
 	r.Handle("/internal/v1/mcp", s.MCP)
 }
@@ -245,6 +270,10 @@ func (s *Internal) describe(w http.ResponseWriter, r *http.Request) error {
 		MCPURL: strings.TrimRight(s.PublicURL, "/") + "/internal/v1/mcp"}
 	if d.Reviewers == nil {
 		d.Reviewers = []string{}
+	}
+	d.AgentBackend = "operator"
+	if s.nabuAgent(ctx, t) != "" {
+		d.AgentBackend = "nabu"
 	}
 	_ = json.Unmarshal(t.Input, &d.Input)
 	if t.InitiatorID != nil {
@@ -417,6 +446,10 @@ func (s *Internal) agentSession(w http.ResponseWriter, r *http.Request) error {
 		return apperr.Unprocessable("workspace_required", "workspaceUrl and workspaceToken are required")
 	}
 	if s.Operator == nil || s.Config == nil {
+		if s.Nabu != nil {
+			// Not transient: the task is not retried against a missing operator.
+			return apperr.Conflict("nabu_not_bound", "the scenario of the task is not bound to a service agent in Administration → Nabu")
+		}
 		return apperr.Unavailable("agent_unavailable", "the agent operator is not configured")
 	}
 	sc := ScenarioOf(t.Type)
@@ -453,6 +486,74 @@ func (s *Internal) agentSession(w http.ResponseWriter, r *http.Request) error {
 	}
 	httpx.JSON(w, http.StatusOK, map[string]string{"agentUrl": s.AgentURL, "sessionId": res.SessionID,
 		"sessionToken": res.SessionToken, "model": res.Model})
+	return nil
+}
+
+// AgentRun is the answer of POST /internal/v1/tasks/{id}/agent-run.
+type AgentRun struct {
+	RunID          string `json:"runId"`
+	WorkspaceToken string `json:"workspaceToken"`
+	WorkspaceID    string `json:"workspaceId"`
+	RelayURL       string `json:"relayUrl"`
+	EventsURL      string `json:"eventsUrl"`
+	EventsToken    string `json:"eventsToken"`
+}
+
+// agentRun starts the run of the service agent of Nabu for a task
+// (FTR.HMR.CMN-0006 tech §3.4): api holds the client credentials and passes the
+// runner only the workspace token and the events token of this run.
+func (s *Internal) agentRun(w http.ResponseWriter, r *http.Request) error {
+	ctx := r.Context()
+	t := taskOf(r)
+	var in struct {
+		Input  string `json:"input"`
+		Resume bool   `json:"resume"`
+	}
+	if err := httpx.Decode(r, &in); err != nil {
+		return err
+	}
+	name := s.nabuAgent(ctx, t)
+	if name == "" {
+		return apperr.Conflict("nabu_not_bound", "the scenario of the task is not bound to an agent of Nabu")
+	}
+	var attempt int
+	if err := s.Pool.QueryRow(ctx, `SELECT count(*) FROM pi_sessions WHERE task_id = $1`, t.ID).Scan(&attempt); err != nil {
+		return err
+	}
+	if in.Resume && attempt >= 2 {
+		return apperr.Conflict("resume_exhausted", "the task already resumed once after an agent failure")
+	}
+	sc := ScenarioOf(t.Type)
+	runCtx, _ := json.Marshal(map[string]any{"scenario": sc, "taskId": t.ID, "service": t.Service})
+	initiator := ""
+	if t.InitiatorID != nil && s.UserEmail != nil {
+		initiator = s.UserEmail(ctx, *t.InitiatorID)
+	}
+	started, err := s.Nabu.StartRun(ctx, name, nabu.RunInput{
+		Input:   taskSystem + "\n\n" + in.Input,
+		Context: runCtx,
+		// The task token is the MCP token of the run: it resolves to the task's grant.
+		CallerMCP: []nabu.CallerMCP{{Name: "hammurapi", URL: s.NabuMCPURL,
+			Headers: map[string]string{"Authorization": r.Header.Get("Authorization")}}},
+		Initiator:      initiator,
+		IdempotencyKey: fmt.Sprintf("task:%s:%d", t.ID, attempt),
+	})
+	if err != nil {
+		var ae *nabu.APIError
+		if errors.As(err, &ae) {
+			return apperr.New(ae.Status, ae.Code, ae.Message)
+		}
+		return apperr.Unavailable("nabu_unavailable", "the agent is temporarily unavailable")
+	}
+	if started.WorkspaceToken == "" || started.RelayURL == "" {
+		return apperr.Unprocessable("nabu_agent_workspace", "the agent "+name+" of Nabu does not work in an external workspace")
+	}
+	if _, err := s.Pool.Exec(ctx, `INSERT INTO pi_sessions (task_id, scenario, operator_id, model, resumes)
+		VALUES ($1, $2::agent_scenario, $3, $4, $5)`, t.ID, string(sc), "nabu:"+started.RunID, "nabu:"+name, attempt); err != nil {
+		return err
+	}
+	httpx.JSON(w, http.StatusOK, AgentRun{RunID: started.RunID, WorkspaceToken: started.WorkspaceToken, WorkspaceID: started.WorkspaceID,
+		RelayURL: started.RelayURL, EventsURL: started.EventsURL, EventsToken: started.EventsToken})
 	return nil
 }
 

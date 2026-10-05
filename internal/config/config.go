@@ -68,6 +68,30 @@ type Config struct {
 
 	BootstrapAdmins []string
 
+	// Sign-in (FTR.HMR.CMN-0006 R1, tech §7): AUTH_PROVIDER empty — the git
+	// provider as before; github — GitHub with the email and the organization
+	// (GITHUB_LOGIN_* or, when empty, the git provider's OAuth app); oidc.
+	AuthProvider            string
+	OIDCIssuer              string
+	OIDCClientID            string
+	OIDCClientSecret        string
+	OIDCScopes              string
+	OIDCProviderName        string
+	GitHubLoginClientID     string
+	GitHubLoginClientSecret string
+	GitHubAllowedOrg        string
+
+	// Nabu (R4, tech §7): empty NABU_URL — the mode without the agent, unless
+	// the agent operator of FTR.HMR.CMN-0004 is still deployed (AgentEnabled).
+	NabuURL          string
+	NabuClientID     string
+	NabuClientSecret string
+	NabuJWKSCache    time.Duration
+	// How Nabu reaches the MCP of Hammurapi for service agents (callerMcp):
+	// the worker MCP for its scenarios and the internal /mcp for runner tasks.
+	NabuWorkerMCPURL string
+	NabuTaskMCPURL   string
+
 	UploadMaxBytes     int64
 	UploadAllowedTypes []string
 
@@ -140,47 +164,59 @@ var DefaultImportAssetTypes = []string{
 // Load reads configuration from the environment. Mode-specific requirements are checked by Validate.
 func Load() (*Config, error) {
 	c := &Config{
-		HTTPAddr:             env("HTTP_ADDR", ":8080"),
-		ServiceAddr:          env("SERVICE_ADDR", ":9100"),
-		MCPAddr:              env("MCP_ADDR", ""),
-		InternalAddr:         env("INTERNAL_ADDR", env("MCP_ADDR", ":8081")),
-		WorkerMCPAddr:        env("WORKER_MCP_ADDR", ":8083"),
-		PublicURL:            strings.TrimRight(env("PUBLIC_URL", "http://localhost:8080"), "/"),
-		GitProvider:          strings.ToLower(env("GIT_PROVIDER", "")),
-		GitBaseURL:           strings.TrimRight(env("GIT_BASE_URL", ""), "/"),
-		GitRepo:              env("GIT_REPO", ""),
-		GitDefaultBranch:     env("GIT_DEFAULT_BRANCH", "main"),
-		GitHubAppID:          env("GITHUB_APP_ID", ""),
-		GitHubPrivateKey:     env("GITHUB_APP_PRIVATE_KEY", ""),
-		GitHubClientID:       env("GITHUB_CLIENT_ID", ""),
-		GitHubSecret:         env("GITHUB_CLIENT_SECRET", ""),
-		GitLabClientID:       env("GITLAB_CLIENT_ID", ""),
-		GitLabSecret:         env("GITLAB_CLIENT_SECRET", ""),
-		WebhookSecret:        env("WEBHOOK_SECRET", ""),
-		GitLabBotToken:       env("GITLAB_BOT_TOKEN", ""),
-		BotLogin:             env("HAMMURAPI_BOT_LOGIN", ""),
-		CIResultsSecret:      splitList(env("CI_RESULTS_SECRET", ""), ","),
-		RunnerExecutor:       strings.ToLower(env("RUNNER_EXECUTOR", "k8s")),
-		RunnerNamespace:      env("RUNNER_NAMESPACE", "hammurapi-runners"),
-		RunnerImage:          env("RUNNER_IMAGE", ""),
-		RunnerWorkdir:        env("RUNNER_WORKDIR", "/var/lib/hammurapi/runs"),
-		RunnerCPU:            env("RUNNER_CPU", "2"),
-		RunnerMemory:         env("RUNNER_MEMORY", "4Gi"),
-		AgentAddr:            strings.TrimRight(env("AGENT_ADDR", "http://agent:8090"), "/"),
-		AgentServiceToken:    env("AGENT_SERVICE_TOKEN", ""),
-		BootstrapDeepSeekKey: env("BOOTSTRAP_DEEPSEEK_API_KEY", ""),
-		BootstrapDeepSeekURL: env("BOOTSTRAP_DEEPSEEK_BASE_URL", ""),
-		BootstrapAdmins:      splitList(env("BOOTSTRAP_ADMINS", ""), ","),
-		DatabaseURL:          env("DATABASE_URL", ""),
-		KafkaBrokers:         splitList(env("KAFKA_BROKERS", ""), ","),
-		S3Endpoint:           env("S3_ENDPOINT", ""),
-		S3Bucket:             env("S3_BUCKET", "hammurapi"),
-		S3AccessKey:          env("S3_ACCESS_KEY", ""),
-		S3SecretKey:          env("S3_SECRET_KEY", ""),
-		WhisperURL:           strings.TrimRight(env("WHISPER_URL", ""), "/"),
-		OTLPEndpoint:         env("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
-		LogLevel:             env("LOG_LEVEL", "info"),
-		DefaultLanguage:      env("DEFAULT_LANGUAGE", "en"),
+		HTTPAddr:                env("HTTP_ADDR", ":8080"),
+		ServiceAddr:             env("SERVICE_ADDR", ":9100"),
+		MCPAddr:                 env("MCP_ADDR", ""),
+		InternalAddr:            env("INTERNAL_ADDR", env("MCP_ADDR", ":8081")),
+		WorkerMCPAddr:           env("WORKER_MCP_ADDR", ":8083"),
+		PublicURL:               strings.TrimRight(env("PUBLIC_URL", "http://localhost:8080"), "/"),
+		GitProvider:             strings.ToLower(env("GIT_PROVIDER", "")),
+		GitBaseURL:              strings.TrimRight(env("GIT_BASE_URL", ""), "/"),
+		GitRepo:                 env("GIT_REPO", ""),
+		GitDefaultBranch:        env("GIT_DEFAULT_BRANCH", "main"),
+		GitHubAppID:             env("GITHUB_APP_ID", ""),
+		GitHubPrivateKey:        env("GITHUB_APP_PRIVATE_KEY", ""),
+		GitHubClientID:          env("GITHUB_CLIENT_ID", ""),
+		GitHubSecret:            env("GITHUB_CLIENT_SECRET", ""),
+		GitLabClientID:          env("GITLAB_CLIENT_ID", ""),
+		GitLabSecret:            env("GITLAB_CLIENT_SECRET", ""),
+		WebhookSecret:           env("WEBHOOK_SECRET", ""),
+		GitLabBotToken:          env("GITLAB_BOT_TOKEN", ""),
+		BotLogin:                env("HAMMURAPI_BOT_LOGIN", ""),
+		CIResultsSecret:         splitList(env("CI_RESULTS_SECRET", ""), ","),
+		RunnerExecutor:          strings.ToLower(env("RUNNER_EXECUTOR", "k8s")),
+		RunnerNamespace:         env("RUNNER_NAMESPACE", "hammurapi-runners"),
+		RunnerImage:             env("RUNNER_IMAGE", ""),
+		RunnerWorkdir:           env("RUNNER_WORKDIR", "/var/lib/hammurapi/runs"),
+		RunnerCPU:               env("RUNNER_CPU", "2"),
+		RunnerMemory:            env("RUNNER_MEMORY", "4Gi"),
+		AgentAddr:               strings.TrimRight(env("AGENT_ADDR", "http://agent:8090"), "/"),
+		AgentServiceToken:       env("AGENT_SERVICE_TOKEN", ""),
+		BootstrapDeepSeekKey:    env("BOOTSTRAP_DEEPSEEK_API_KEY", ""),
+		BootstrapDeepSeekURL:    env("BOOTSTRAP_DEEPSEEK_BASE_URL", ""),
+		BootstrapAdmins:         splitList(env("BOOTSTRAP_ADMINS", ""), ","),
+		AuthProvider:            env("AUTH_PROVIDER", ""),
+		OIDCIssuer:              strings.TrimRight(env("OIDC_ISSUER", ""), "/"),
+		OIDCClientID:            env("OIDC_CLIENT_ID", ""),
+		OIDCClientSecret:        env("OIDC_CLIENT_SECRET", ""),
+		OIDCScopes:              env("OIDC_SCOPES", "openid email profile"),
+		OIDCProviderName:        env("OIDC_PROVIDER_NAME", "Keycloak"),
+		GitHubLoginClientID:     env("GITHUB_LOGIN_CLIENT_ID", ""),
+		GitHubLoginClientSecret: env("GITHUB_LOGIN_CLIENT_SECRET", ""),
+		GitHubAllowedOrg:        env("GITHUB_ALLOWED_ORG", ""),
+		NabuURL:                 strings.TrimRight(env("NABU_URL", ""), "/"),
+		NabuClientID:            env("NABU_CLIENT_ID", ""),
+		NabuClientSecret:        env("NABU_CLIENT_SECRET", ""),
+		DatabaseURL:             env("DATABASE_URL", ""),
+		KafkaBrokers:            splitList(env("KAFKA_BROKERS", ""), ","),
+		S3Endpoint:              env("S3_ENDPOINT", ""),
+		S3Bucket:                env("S3_BUCKET", "hammurapi"),
+		S3AccessKey:             env("S3_ACCESS_KEY", ""),
+		S3SecretKey:             env("S3_SECRET_KEY", ""),
+		WhisperURL:              strings.TrimRight(env("WHISPER_URL", ""), "/"),
+		OTLPEndpoint:            env("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
+		LogLevel:                env("LOG_LEVEL", "info"),
+		DefaultLanguage:         env("DEFAULT_LANGUAGE", "en"),
 	}
 	var err error
 	if c.RunnerWorkspacePort, err = envInt("RUNNER_WORKSPACE_PORT", 8095); err != nil {
@@ -205,6 +241,9 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if c.DiscoveryTimeout, err = envDuration("DISCOVERY_TIMEOUT", 20*time.Minute); err != nil {
+		return nil, err
+	}
+	if c.NabuJWKSCache, err = envDuration("NABU_JWKS_CACHE", 10*time.Minute); err != nil {
 		return nil, err
 	}
 	if c.AgentIdleTimeout, err = envDuration("AGENT_IDLE_TIMEOUT", 15*time.Minute); err != nil {
@@ -276,6 +315,8 @@ func Load() (*Config, error) {
 	}
 	c.InternalURL = strings.TrimRight(env("INTERNAL_URL", "http://"+localAddr(c.InternalAddr)), "/")
 	c.WorkerMCPURL = strings.TrimRight(env("WORKER_MCP_URL", "http://"+localAddr(c.WorkerMCPAddr)), "/")
+	c.NabuWorkerMCPURL = env("NABU_WORKER_MCP_URL", c.WorkerMCPURL+"/mcp")
+	c.NabuTaskMCPURL = env("NABU_TASK_MCP_URL", c.InternalURL+"/mcp")
 	c.AgentRunnerURL = strings.TrimRight(env("AGENT_RUNNER_URL", c.AgentAddr), "/")
 	c.PublicWebURL = strings.TrimRight(env("PUBLIC_WEB_URL", c.PublicURL), "/")
 	c.PublicAPIURL = strings.TrimRight(env("PUBLIC_API_URL", c.PublicURL), "/")
@@ -332,10 +373,28 @@ func (c *Config) Validate(mode string) error {
 	if mode == "api" {
 		need("WEBHOOK_SECRET", c.WebhookSecret)
 	}
-	if mode == "api" || mode == "worker" {
-		need("AGENT_SERVICE_TOKEN", c.AgentServiceToken)
-	}
+	// AGENT_SERVICE_TOKEN is optional since FTR.HMR.CMN-0006: without it and
+	// without NABU_URL Hammurapi works without the agent (R9).
 	need("S3_ENDPOINT", c.S3Endpoint)
+	switch c.AuthProvider {
+	case "":
+	case "github":
+		// GitHub sign-in with another git provider needs its own OAuth App.
+		if c.GitProvider != "github" || c.GitHubLoginClientID != "" {
+			need("GITHUB_LOGIN_CLIENT_ID", c.GitHubLoginClientID)
+			need("GITHUB_LOGIN_CLIENT_SECRET", c.GitHubLoginClientSecret)
+		}
+	case "oidc":
+		need("OIDC_ISSUER", c.OIDCIssuer)
+		need("OIDC_CLIENT_ID", c.OIDCClientID)
+		need("OIDC_CLIENT_SECRET", c.OIDCClientSecret)
+	default:
+		return fmt.Errorf("AUTH_PROVIDER must be empty, github or oidc, got %q", c.AuthProvider)
+	}
+	if c.NabuURL != "" {
+		need("NABU_CLIENT_ID", c.NabuClientID)
+		need("NABU_CLIENT_SECRET", c.NabuClientSecret)
+	}
 	return missingErr(missing)
 }
 
@@ -430,3 +489,7 @@ func splitList(s, sep string) []string {
 	}
 	return out
 }
+
+// AgentEnabled reports whether Hammurapi has an agent: Nabu or, until the
+// transfer, the built-in operator (FTR.HMR.CMN-0006 R9).
+func (c *Config) AgentEnabled() bool { return c.NabuURL != "" || c.AgentServiceToken != "" }

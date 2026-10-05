@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -36,6 +37,13 @@ type User struct {
 	AreaAdmin   []domain.Area        `json:"areaAdmin"`
 	Experts     []auth.ExpertDomains `json:"experts"`
 	CreatedAt   time.Time            `json:"createdAt"`
+	// Email, sign-in identities (issuers) and the git account
+	// (FTR.HMR.CMN-0006 design: columns «Вход» and «Git-аккаунт»).
+	Email      *string  `json:"email"`
+	Logins     []string `json:"logins"`
+	GitLogin   *string  `json:"gitLogin"`
+	CreatedVia string   `json:"createdVia"`
+	LinkReview bool     `json:"linkReview"`
 }
 
 // RolesInput is the body of PUT /users/{id}/roles. There are no editor or
@@ -47,13 +55,17 @@ type RolesInput struct {
 
 // Service implements admin use cases.
 type Service struct {
-	pool *pgxpool.Pool
+	pool       *pgxpool.Pool
+	identities *auth.Repository
 	// RunnerExecutor is shown in the admin panel (local is not for production, RUN-10).
 	RunnerExecutor string
 }
 
 // NewService creates the service.
 func NewService(pool *pgxpool.Pool) *Service { return &Service{pool: pool} }
+
+// WithIdentities enables linking of new users (FTR.HMR.CMN-0006 tech §2).
+func (s *Service) WithIdentities(r *auth.Repository) *Service { s.identities = r; return s }
 
 func requireGlobal(p *domain.Principal) error {
 	if !p.GlobalAdmin {
@@ -70,15 +82,19 @@ func (s *Service) Users(ctx context.Context, q string, page httpx.Page) ([]User,
 		args = append(args, c.T, c.ID)
 		cond = ` AND (created_at, id::text) > ($3, $4)`
 	}
-	rows, err := s.pool.Query(ctx, `SELECT id, username, display_name, avatar_url, is_global_admin, created_at FROM users
-		WHERE (username ILIKE $1 OR display_name ILIKE $1)`+cond+` ORDER BY created_at, id::text LIMIT $2`, args...)
+	rows, err := s.pool.Query(ctx, `SELECT id, username, display_name, avatar_url, is_global_admin, created_at, email,
+			COALESCE((SELECT array_agg(issuer ORDER BY issuer) FROM user_identities i WHERE i.user_id = users.id), '{}'),
+			(SELECT login FROM git_accounts g WHERE g.user_id = users.id), created_via, link_review
+		FROM users
+		WHERE (username ILIKE $1 OR display_name ILIKE $1 OR email ILIKE $1)`+cond+` ORDER BY created_at, id::text LIMIT $2`, args...)
 	if err != nil {
 		return nil, err
 	}
 	var users []User
 	for rows.Next() {
 		var u User
-		if err := rows.Scan(&u.ID, &u.Username, &u.DisplayName, &u.AvatarURL, &u.GlobalAdmin, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &u.DisplayName, &u.AvatarURL, &u.GlobalAdmin, &u.CreatedAt, &u.Email,
+			&u.Logins, &u.GitLogin, &u.CreatedVia, &u.LinkReview); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -233,6 +249,68 @@ func (s *Service) Routes(r chi.Router) {
 			return err
 		}
 		httpx.JSON(w, 200, httpx.NewList(users, page.Limit, func(u User) (time.Time, string) { return u.CreatedAt, u.ID.String() }))
+		return nil
+	}))
+	r.Get("/users/unlinked", httpx.Handler(func(w http.ResponseWriter, r *http.Request) error {
+		p, err := httpx.MustPrincipal(r)
+		if err != nil {
+			return err
+		}
+		if err := requireGlobal(p); err != nil {
+			return err
+		}
+		items, err := s.identities.Unlinked(r.Context())
+		if err != nil {
+			return err
+		}
+		if items == nil {
+			items = []auth.Unlinked{}
+		}
+		httpx.JSON(w, 200, map[string]any{"items": items})
+		return nil
+	}))
+	r.Post("/users/{id}/link", httpx.Handler(func(w http.ResponseWriter, r *http.Request) error {
+		p, err := httpx.MustPrincipal(r)
+		if err != nil {
+			return err
+		}
+		if err := requireGlobal(p); err != nil {
+			return err
+		}
+		id, err := httpx.ParamUUID(r, "id")
+		if err != nil {
+			return err
+		}
+		var in struct {
+			TargetUserID uuid.UUID `json:"targetUserId"`
+		}
+		if err := httpx.Decode(r, &in); err != nil {
+			return err
+		}
+		if err := s.identities.Link(r.Context(), id, in.TargetUserID); err != nil {
+			return err
+		}
+		slog.InfoContext(r.Context(), "admin journal: user linked", "actor", p.UserID, "user", id, "target", in.TargetUserID)
+		httpx.NoContent(w)
+		return nil
+	}))
+	r.Post("/users/{id}/confirm-new", httpx.Handler(func(w http.ResponseWriter, r *http.Request) error {
+		p, err := httpx.MustPrincipal(r)
+		if err != nil {
+			return err
+		}
+		if err := requireGlobal(p); err != nil {
+			return err
+		}
+		id, err := httpx.ParamUUID(r, "id")
+		if err != nil {
+			return err
+		}
+		if err := s.identities.ConfirmNew(r.Context(), id); err != nil {
+			return err
+		}
+		slog.InfoContext(r.Context(), "admin journal: user confirmed as new", "actor", p.UserID, "user", id)
+		httpx.NoContent(w)
 		return nil
 	}))
 	r.Put("/users/{id}/roles", httpx.Handler(func(w http.ResponseWriter, r *http.Request) error {

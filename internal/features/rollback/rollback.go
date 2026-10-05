@@ -150,6 +150,9 @@ func (m Machine) Step(ctx context.Context, tx pgx.Tx, run *workflows.Run, evs []
 			if err != nil || pr == nil || pr.MergeSHA == nil {
 				return block(fmt.Sprintf("the merged PR of %s is unknown", v.Services[v.Idx]), stepRevert)
 			}
+			if domain.AgentDisabled() {
+				return block(fmt.Sprintf("the agent is not connected: revert PR %d of %s by hand", pr.Number, svc.Key), stepRevert)
+			}
 			if _, err := codegen.StartTask(ctx, tx, codegen.TaskSpec{Type: codegen.TaskRevert, FeatureID: &f.ID, ReleaseID: &rel.ID, ServiceID: svc.ID,
 				Initiator: &initiator, Parent: &run.ID, Input: codegen.TaskInput{PRNumber: pr.Number, MergeSHA: *pr.MergeSHA, RevertPRID: pr.ID.String(),
 					Release: rel.Key, Reason: v.Reason}}); err != nil {

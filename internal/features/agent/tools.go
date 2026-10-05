@@ -41,11 +41,22 @@ type ToolDeps struct {
 	EditDiscovery func(ctx context.Context, p *domain.Principal, issueKey string, in DiscoveryInput) error
 	// TestMetric dry-runs a metric query in a configured source.
 	TestMetric func(ctx context.Context, source, query string) (float64, error)
+	// CreateIssue creates an issue on behalf of the user of a Nabu call
+	// (FTR.HMR.CMN-0006 R7) and returns its key.
+	CreateIssue func(ctx context.Context, p *domain.Principal, in IssueInput) (string, error)
+}
+
+// IssueInput is the argument of create_issue.
+type IssueInput struct {
+	Type        string `json:"type"`
+	Domain      string `json:"domain"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
 }
 
 var (
-	readers   = []string{mcp.ModeGeneral, mcp.ModeSpec, mcp.ModeDiscovery, mcp.ModeGenerate, mcp.ModeCheck, mcp.ModeTask}
-	research  = []string{mcp.ModeGeneral, mcp.ModeSpec, mcp.ModeDiscovery, mcp.ModeGenerate, mcp.ModeCheck}
+	readers   = []string{mcp.ModeGeneral, mcp.ModeSpec, mcp.ModeDiscovery, mcp.ModeGenerate, mcp.ModeCheck, mcp.ModeTask, mcp.ModeNabu}
+	research  = []string{mcp.ModeGeneral, mcp.ModeSpec, mcp.ModeDiscovery, mcp.ModeGenerate, mcp.ModeCheck, mcp.ModeNabu}
 	codeRead  = []string{mcp.ModeDiscovery, mcp.ModeGenerate, mcp.ModeCheck}
 	specModes = []string{mcp.ModeSpec}
 )
@@ -346,6 +357,36 @@ func Tools(d ToolDeps) []mcp.Tool {
 					files = files[:500]
 				}
 				return strings.Join(files, "\n"), nil
+			},
+		},
+		{
+			Name: "create_issue",
+			Description: "Create an issue (an idea or a problem) in a domain on behalf of the user. The user becomes its author; " +
+				"Discovery starts automatically. Returns the issue key.",
+			Modes: []string{mcp.ModeNabu},
+			InputSchema: schema(map[string]any{
+				"type":        map[string]any{"type": "string", "enum": []string{"idea", "problem"}},
+				"domain":      map[string]any{"type": "string", "description": "domain key, e.g. FMS"},
+				"title":       map[string]any{"type": "string", "description": "up to 200 characters"},
+				"description": map[string]any{"type": "string", "description": "markdown"},
+			}, "type", "domain", "title"),
+			Handler: func(ctx context.Context, g mcp.Grant, raw json.RawMessage) (string, error) {
+				var a IssueInput
+				if err := json.Unmarshal(raw, &a); err != nil {
+					return "", &mcp.ToolError{Msg: "invalid arguments"}
+				}
+				if d.CreateIssue == nil {
+					return "", &mcp.ToolError{Msg: "issues cannot be created here"}
+				}
+				p, err := d.Principal(ctx, g.UserID)
+				if err != nil {
+					return "", err
+				}
+				key, err := d.CreateIssue(ctx, p, a)
+				if err != nil {
+					return "", toolErr(err)
+				}
+				return "Created issue " + key + ".", nil
 			},
 		},
 		{

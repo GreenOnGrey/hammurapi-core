@@ -43,6 +43,7 @@ import (
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/imports"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/issues"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/metricsources"
+	"github.com/GreenOnGrey/hammurapi-core/internal/features/nabuconn"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/overview"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/profile"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/releases"
@@ -67,6 +68,7 @@ import (
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/kafka"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/mcp"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/metrics"
+	"github.com/GreenOnGrey/hammurapi-core/internal/platform/nabu"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/postgres"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/signing"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/storage"
@@ -118,14 +120,72 @@ func newCore(ctx context.Context, cfg *config.Config) (*core, error) {
 		return nil, fmt.Errorf("s3: %w", err)
 	}
 	authRepo := auth.NewRepository(pool)
+	authSvc := auth.NewService(authRepo, provider, box, cfg.PublicAPIURL, cfg.BootstrapAdmins, cfg.DefaultLanguage)
+	authSvc.SetLogin(loginProvider(cfg, provider), gitAPIURL(cfg))
+	domain.SetAgentDisabled(!cfg.AgentEnabled())
 	return &core{
-		cfg: cfg, pool: pool, provider: provider, authRepo: authRepo,
-		authSvc: auth.NewService(authRepo, provider, box, cfg.PublicAPIURL, cfg.BootstrapAdmins, cfg.DefaultLanguage),
-		store:   specdata.NewPG(pool), s3: s3, events: events.NewPGPublisher(pool), secrets: signing.NewSecrets(box), box: box,
+		cfg: cfg, pool: pool, provider: provider, authRepo: authRepo, authSvc: authSvc,
+		store: specdata.NewPG(pool), s3: s3, events: events.NewPGPublisher(pool), secrets: signing.NewSecrets(box), box: box,
 	}, nil
 }
 
 func (c *core) close() { c.pool.Close() }
+
+// gitAPIURL is the REST API of the git provider (emails, organizations).
+func gitAPIURL(cfg *config.Config) string {
+	if cfg.GitProvider == "gitlab" {
+		return cfg.GitBaseURL + "/api/v4"
+	}
+	if cfg.GitBaseURL == "" || cfg.GitBaseURL == "https://github.com" {
+		return "https://api.github.com"
+	}
+	return cfg.GitBaseURL + "/api/v3"
+}
+
+// loginProvider builds the sign-in provider (FTR.HMR.CMN-0006 R1): empty
+// AUTH_PROVIDER keeps the sign-in through the git provider.
+func loginProvider(cfg *config.Config, provider git.Provider) auth.LoginProvider {
+	switch cfg.AuthProvider {
+	case "github":
+		scopes := []string{"read:user", "user:email", "read:org"}
+		if cfg.GitProvider == "github" && cfg.GitHubLoginClientID == "" {
+			// The OAuth app of the git provider: the sign-in links the git account.
+			p := git.NewGitHub(githubBase(cfg), githubOAuth(cfg), cfg.GitRepo, cfg.GitHubClientID, cfg.GitHubSecret).WithScopes(scopes...)
+			return &auth.GitLogin{Provider: p, KindName: "github", APIURL: gitAPIURL(cfg), AllowedOrg: cfg.GitHubAllowedOrg, LinksGit: true}
+		}
+		// A separate OAuth App for sign-in: only the identity, the git account is linked apart.
+		base, oauth, api := "https://github.com", "https://github.com", "https://api.github.com"
+		if cfg.GitProvider == "github" {
+			base, oauth, api = githubBase(cfg), githubOAuth(cfg), gitAPIURL(cfg)
+		}
+		p := git.NewGitHub(base, oauth, cfg.GitRepo, cfg.GitHubLoginClientID, cfg.GitHubLoginClientSecret).WithScopes(scopes...)
+		return &auth.GitLogin{Provider: p, KindName: "github", APIURL: api, AllowedOrg: cfg.GitHubAllowedOrg}
+	case "oidc":
+		return &auth.OIDCLogin{Issuer: cfg.OIDCIssuer, ClientID: cfg.OIDCClientID, Secret: cfg.OIDCClientSecret,
+			Scopes: cfg.OIDCScopes, Name: cfg.OIDCProviderName}
+	}
+	return &auth.GitLogin{Provider: provider, KindName: "git", APIURL: gitAPIURL(cfg), LinksGit: true}
+}
+
+func githubBase(cfg *config.Config) string {
+	if cfg.GitBaseURL == "" {
+		return "https://github.com"
+	}
+	return cfg.GitBaseURL
+}
+
+func githubOAuth(cfg *config.Config) string {
+	if cfg.GitOAuthURL == "" {
+		return githubBase(cfg)
+	}
+	return cfg.GitOAuthURL
+}
+
+// nabuService is the connection to Nabu; its Client is nil without NABU_URL.
+func (c *core) nabuService() *nabuconn.Service {
+	return &nabuconn.Service{Pool: c.pool, Client: nabu.New(c.cfg.NabuURL, c.cfg.NabuClientID, c.cfg.NabuClientSecret), Box: c.box,
+		SkillsRepo: c.cfg.GitRepo, DefaultBranch: c.cfg.GitDefaultBranch}
+}
 
 // serviceServer exposes /healthz, /readyz and /metrics on the service port.
 func serviceServer(addr string, ready func(context.Context) error) *http.Server {
@@ -191,6 +251,7 @@ type slices struct {
 	metrics   *metricsources.Service
 	discovery *discovery.Service
 	codegen   *codegen.Service
+	issues    *issues.Service
 	catalog   *catalog.Syncer
 	spec      *specindex.Service
 }
@@ -202,11 +263,14 @@ func (c *core) slices() *slices {
 		PushDebounce: cfg.SpecScanPushDebounce, PushDebounceMax: cfg.SpecScanPushDebounceMax, MaxFileBytes: cfg.SpecScanMaxFileBytes,
 		Timeout: cfg.SpecScanTimeout, PreviewMaxBytes: cfg.SpecFilePreviewMaxBytes, SearchMaxLimit: cfg.SpecSearchMaxLimit,
 		AgentReadMaxChars: cfg.SpecAgentReadMaxChars, AgentPageSize: cfg.SpecAgentPageSize})
+	fs := features.NewService(c.store, c.provider, c.authSvc, c.events, branch)
+	mt := metricsources.NewService(c.pool, c.secrets)
 	return &slices{
 		spec:      spec,
+		issues:    issues.NewService(c.store, fs, mt, c.events),
 		gates:     gates.NewService(c.store, c.provider, c.authSvc, c.events, gategen.Generator{Q: c.pool}, branch),
-		features:  features.NewService(c.store, c.provider, c.authSvc, c.events, branch),
-		metrics:   metricsources.NewService(c.pool, c.secrets),
+		features:  fs,
+		metrics:   mt,
 		discovery: discovery.NewService(c.pool, c.events),
 		codegen:   codegen.NewService(c.store, c.events),
 		catalog:   &catalog.Syncer{Pool: c.pool, Git: c.provider, CatalogChanged: spec.RequestCatalog},
@@ -215,7 +279,15 @@ func (c *core) slices() *slices {
 
 func (c *core) toolDeps(s *slices, loadPrincipal agent.PrincipalLoader) agent.ToolDeps {
 	return agent.ToolDeps{Store: c.store, Git: c.provider, Tokens: c.authSvc, Gates: s.gates, Principal: loadPrincipal,
-		DefaultBranch: c.cfg.GitDefaultBranch, EditDiscovery: s.discovery.AgentEdit, TestMetric: s.metrics.Test}
+		DefaultBranch: c.cfg.GitDefaultBranch, EditDiscovery: s.discovery.AgentEdit, TestMetric: s.metrics.Test,
+		CreateIssue: func(ctx context.Context, p *domain.Principal, in agent.IssueInput) (string, error) {
+			is, err := s.issues.Create(ctx, p, issues.CreateInput{Type: domain.IssueType(in.Type), Domain: in.Domain, Title: in.Title,
+				Description: in.Description, ViaNabu: true})
+			if err != nil {
+				return "", err
+			}
+			return is.Key, nil
+		}}
 }
 
 // RunAPI runs the HTTP API, SSE, webhooks, the chat agent pool and the internal
@@ -247,7 +319,8 @@ func RunAPI(ctx context.Context, cfg *config.Config) error {
 	domainSvc := domains.NewService(c.pool, c.events)
 	domainSvc.CatalogChanged = sl.spec.RequestCatalog // R6: a new domain or system triggers a check
 	profileSvc := profile.NewService(c.pool)
-	adminSvc := admin.NewService(c.pool)
+	adminSvc := admin.NewService(c.pool).WithIdentities(c.authRepo)
+	nabuSvc := c.nabuService()
 	adminSvc.RunnerExecutor = cfg.RunnerExecutor
 	rulesSvc := rules.NewService(c.pool, c.provider, tokens, branch)
 	attSvc := attachments.NewService(c.pool, c.s3, cfg.UploadMaxBytes, cfg.UploadAllowedTypes)
@@ -255,7 +328,7 @@ func RunAPI(ctx context.Context, cfg *config.Config) error {
 		MaxBytes: cfg.ImportMaxBytes, DefaultBranch: branch, AllowedAssets: cfg.ImportAllowedAssetTypes,
 		Limits: imports.Limits{MaxUncompressed: cfg.ImportMaxUncompressedBytes, MaxFiles: cfg.ImportMaxFiles},
 	})
-	issueSvc := issues.NewService(c.store, sl.features, sl.metrics, c.events)
+	issueSvc := sl.issues
 	validationSvc := validation.NewService(c.pool, c.store, c.provider, tokens, c.events)
 	releaseSvc := releases.NewService(c.pool, c.store, c.events)
 	serviceSvc := services.NewService(c.pool, sl.catalog)
@@ -297,13 +370,30 @@ func RunAPI(ctx context.Context, cfg *config.Config) error {
 
 	internal := &runner.Internal{Pool: c.pool, Store: c.store, Git: c.provider, Events: c.events, MCP: mcpServer, GitBaseURL: cfg.GitBaseURL,
 		PublicURL: cfg.InternalURL, Timeout: cfg.RunnerTimeout, TokenLimit: cfg.RunnerTokenLimit,
-		Operator: operatorClient, Config: agentCfg, AgentURL: cfg.AgentRunnerURL}
+		Config: agentCfg, AgentURL: cfg.AgentRunnerURL,
+		Nabu: nabuSvc.Client, NabuBindings: nabuSvc, NabuMCPURL: cfg.NabuTaskMCPURL, UserEmail: c.authRepo.UserEmail}
+	if cfg.AgentServiceToken != "" {
+		internal.Operator = operatorClient // the built-in agent (FTR.HMR.CMN-0004) until the transfer
+	}
 	mcpServer.Resolve = internal.ResolveMCP
+
+	var nabuChat *nabuconn.Chat
+	nabuMCP := &nabuconn.MCPHandler{Server: mcpServer, EnsureUser: c.authSvc.EnsureDelegated}
+	if nabuSvc.Enabled() {
+		nabuChat = &nabuconn.Chat{Client: nabuSvc.Client, Hub: hub, Email: c.authRepo.UserEmail}
+		nabuMCP.Verifier = &nabu.Verifier{Issuer: cfg.NabuURL, Audience: "hammurapi", TTL: cfg.NabuJWKSCache}
+		if _, err := nabuSvc.Get(ctx); err != nil {
+			slog.Warn("nabu settings", "err", err)
+		}
+	}
+	go c.authSvc.BackfillEmails(context.WithoutCancel(ctx))
 
 	authH := auth.NewHandlers(c.authSvc, auth.PublicConfig{
 		Provider: cfg.GitProvider, UploadMaxBytes: cfg.UploadMaxBytes, UploadTypes: cfg.UploadAllowedTypes,
 		ImportMaxBytes: cfg.ImportMaxBytes, Languages: domain.Languages, DefaultLanguage: cfg.DefaultLanguage, DefaultBranch: branch,
 		BootstrapAdminsConfigured: len(cfg.BootstrapAdmins) > 0,
+		Login:                     auth.LoginInfo{Kind: c.authSvc.LoginProvider().Kind(), Label: c.authSvc.LoginProvider().Label(), Org: cfg.GitHubAllowedOrg},
+		Agent:                     agentInfo(cfg),
 	}, strings.HasPrefix(cfg.PublicAPIURL, "https://")).WithWeb(webRedirectBase(cfg), cfg.CookieDomain)
 
 	r := chi.NewRouter()
@@ -329,13 +419,23 @@ func RunAPI(ctx context.Context, cfg *config.Config) error {
 			validationSvc.Routes(r)
 			releaseSvc.Routes(r)
 			serviceSvc.Routes(r)
-			chatSvc.Routes(r)
+			if nabuChat != nil {
+				nabuChat.Routes(r) // the chat is the personal agent in Nabu (R5)
+			} else if cfg.AgentServiceToken != "" {
+				chatSvc.Routes(r)
+			}
 			voice.Routes(r, whisper.New(cfg.WhisperURL))
 			attSvc.Routes(r)
 			importSvc.Routes(r)
-			r.Get("/events", events.SSEHandler(hub))
+			if nabuChat != nil {
+				r.Method(http.MethodGet, "/events", nabuChat.Events(events.SSEHandler(hub)))
+			} else {
+				r.Get("/events", events.SSEHandler(hub))
+			}
 		})
 	})
+	// The MCP of Hammurapi for the personal agents of Nabu (R7, tech §3.6).
+	r.Method(http.MethodPost, "/mcp/nabu", nabuMCP)
 	r.Route("/admin/api/v1", func(r chi.Router) {
 		r.Use(authH.Authenticate, auth.RequireSession, requireAnyAdmin)
 		adminSvc.Routes(r)
@@ -347,6 +447,7 @@ func RunAPI(ctx context.Context, cfg *config.Config) error {
 		deployAdmin.Routes(r)
 		flagHook.AdminRoutes(r)
 		agentCfg.Routes(r) // global administrators only
+		nabuSvc.AdminRoutes(r)
 		sl.spec.AdminRoutes(r)
 	})
 	r.Method(http.MethodPost, "/hooks/v1/git", webhooks.NewReceiver(c.provider, cfg.WebhookSecret, producer))
@@ -367,8 +468,21 @@ func RunAPI(ctx context.Context, cfg *config.Config) error {
 
 	g, gctx := errgroup.WithContext(ctx)
 	serve(gctx, g, api, internalHTTP, svc)
-	g.Go(func() error { chatSvc.Run(gctx); return nil })
+	if cfg.AgentServiceToken != "" {
+		g.Go(func() error { chatSvc.Run(gctx); return nil })
+	}
 	return g.Wait()
+}
+
+// agentInfo is the agent block of /api/v1/config (tech §3.1).
+func agentInfo(cfg *config.Config) auth.AgentInfo {
+	switch {
+	case cfg.NabuURL != "":
+		return auth.AgentInfo{Enabled: true, Provider: "nabu"}
+	case cfg.AgentServiceToken != "":
+		return auth.AgentInfo{Enabled: true, Provider: "builtin"}
+	}
+	return auth.AgentInfo{Enabled: false}
 }
 
 // RunOperator serves the agent operator (FTR.HMR.CMN-0004 arch §3): the internal
@@ -447,7 +561,15 @@ func RunWorker(ctx context.Context, cfg *config.Config) error {
 	mcpServer := mcp.NewServer()
 	mcpServer.Register(sl.spec.Tools()...)
 	mcpServer.Register(agent.Tools(c.toolDeps(sl, loadPrincipal))...)
-	agents := &agentrun.Runner{Operator: operatorClient, Config: agentCfg, MCP: mcpServer, URL: cfg.WorkerMCPURL + "/mcp"}
+	agents := &agentrun.Runner{Config: agentCfg, MCP: mcpServer, URL: cfg.WorkerMCPURL + "/mcp"}
+	if cfg.AgentServiceToken != "" {
+		// Without the token there is no built-in agent: unbound scenarios fail at
+		// once instead of retrying against an operator that is not there.
+		agents.Operator = operatorClient
+	}
+	if ns := c.nabuService(); ns.Enabled() {
+		agents.Nabu = &agentrun.NabuRuns{Client: ns.Client, Bindings: ns, CallerMCPURL: cfg.NabuWorkerMCPURL}
+	}
 
 	exec, err := NewExecutor(cfg)
 	if err != nil {

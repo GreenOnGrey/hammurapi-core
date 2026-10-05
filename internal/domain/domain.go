@@ -39,7 +39,8 @@ func (a Area) Index() int {
 func (a Area) Valid() bool { return a.Index() >= 0 }
 
 // Generated reports whether the agent writes the gate (tech and qa, FTR.HMR.CMN-0002 R12–R14).
-func (a Area) Generated() bool { return a == AreaTech || a == AreaQA }
+// Without the agent people write every gate (FTR.HMR.CMN-0006 R9).
+func (a Area) Generated() bool { return (a == AreaTech || a == AreaQA) && !AgentDisabled() }
 
 // ApproverKind is the expert kind that approves the area: product and design
 // by product experts, arch, tech and qa by technical experts.

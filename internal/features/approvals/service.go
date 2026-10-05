@@ -179,7 +179,7 @@ func (s *Service) Approve(ctx context.Context, p *domain.Principal, uniqueID str
 	gates.PublishGateUpdated(ctx, s.events, f.UniqueID, g)
 	s.events.Publish(ctx, events.Event{Type: events.ApprovalsChanged, Data: map[string]string{"uniqueId": f.UniqueID}})
 	s.events.Publish(ctx, events.Event{Type: events.FocusChanged, Data: map[string]string{"uniqueId": f.UniqueID}})
-	if !area.Generated() && s.gen != nil {
+	if !area.Generated() && s.gen != nil && !domain.AgentDisabled() {
 		for i := range all {
 			if all[i].Area == area {
 				all[i].Status = domain.GateApproved

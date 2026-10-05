@@ -50,6 +50,14 @@ task session. `api`/`worker` resolve the scenario's connection, model, skills an
 own and serve their checkout to Pi over the workspace server (`:8095`). Hammurapi's tools are an MCP
 server with a grant per session (`internal/features/agent/tools.go`, `internal/features/specindex/tools.go`).
 
+Nabu (FTR.HMR.CMN-0006): with `NABU_URL` the chat is proxied to the user's personal agent in Nabu
+(`internal/features/nabuconn`: chat proxy, `nabu.*` SSE bridge, `/mcp/nabu` with Nabu JWTs, admin
+section, transfer of the agent settings); scenarios bound to service agents run through
+`agentrun.NabuRuns`, and the runner connects its workspace to Nabu's relay
+(`internal/platform/relay`, a copy of the client side of `nabu-core/internal/relay` — keep them in
+step). Without Nabu and without `AGENT_SERVICE_TOKEN` Hammurapi works without the agent:
+`domain.AgentDisabled()`.
+
 ## Commands
 
 ```sh

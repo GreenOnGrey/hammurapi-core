@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/GreenOnGrey/hammurapi-core/internal/apperr"
+	"github.com/GreenOnGrey/hammurapi-core/internal/domain"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/agentcfg"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/workflows"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/agent"
@@ -44,6 +45,9 @@ type Runner struct {
 	Config   Config
 	MCP      *mcp.Server
 	URL      string // the worker's MCP endpoint as the operator reaches it
+	// Nabu runs the scenarios bound to its service agents (FTR.HMR.CMN-0006);
+	// the operator serves the rest until the transfer.
+	Nabu *NabuRuns
 }
 
 // Outcome is the result of a session.
@@ -73,6 +77,17 @@ func (o Outcome) Last(kind string) (json.RawMessage, bool) {
 
 // ErrNoAgent means the agent is not configured (no connection or default model).
 var ErrNoAgent = errors.New("the agent is not configured: add an LLM connection and the default model in Administration → Agent")
+
+// IsNoAgent reports that no agent can run the scenario: the built-in agent is
+// not configured, or Hammurapi works without the agent (FTR.HMR.CMN-0006 R9).
+// Optional steps (the code check) are skipped on it.
+func IsNoAgent(err error) bool {
+	if errors.Is(err, ErrNoAgent) {
+		return true
+	}
+	e, ok := apperr.As(err)
+	return ok && e.Code == "agent_disabled"
+}
 
 // LLMError is a classified LLM failure of a session (R20).
 type LLMError struct {
@@ -113,9 +128,12 @@ const System = "You are Hammurapi's agent working in the background on a task of
 // LLM failures that retrying cannot fix are returned as permanent workflow
 // errors, so the run is blocked with the reason at once.
 func (r *Runner) Once(ctx context.Context, sc agent.Scenario, g mcp.Grant, system, prompt string) (Outcome, error) {
+	if name := r.Nabu.agentFor(ctx, sc); name != "" {
+		return r.onceNabu(ctx, name, sc, g, system, prompt)
+	}
 	out := Outcome{Results: map[string][]json.RawMessage{}}
-	if r.Operator == nil || r.Config == nil {
-		return out, ErrNoAgent
+	if r.Operator == nil || r.Config == nil || domain.AgentDisabled() {
+		return out, r.Nabu.errNoBackend(sc)
 	}
 	cfg, err := r.Config.Resolve(ctx, sc)
 	if e, ok := apperr.As(err); ok && e.Code == "agent_not_configured" {

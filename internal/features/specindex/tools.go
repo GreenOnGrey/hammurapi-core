@@ -12,7 +12,7 @@ import (
 )
 
 // allModes: the tools are read-only and offered in every scenario (R18).
-var allModes = []string{mcp.ModeGeneral, mcp.ModeSpec, mcp.ModeDiscovery, mcp.ModeGenerate, mcp.ModeCheck, mcp.ModeTask}
+var allModes = []string{mcp.ModeGeneral, mcp.ModeSpec, mcp.ModeDiscovery, mcp.ModeGenerate, mcp.ModeCheck, mcp.ModeTask, mcp.ModeNabu}
 
 func schema(props map[string]any, required ...string) map[string]any {
 	if required == nil {

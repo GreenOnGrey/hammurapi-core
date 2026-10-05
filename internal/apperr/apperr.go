@@ -68,3 +68,9 @@ func As(err error) (*Error, bool) {
 	}
 	return nil, false
 }
+
+// AgentDisabled is agent_disabled (FTR.HMR.CMN-0006 tech §8): an action of the
+// agent in the mode without the agent.
+func AgentDisabled() *Error {
+	return Conflict("agent_disabled", "the agent is not connected: Hammurapi works without the agent")
+}

@@ -208,7 +208,7 @@ func TestSpecIndex(t *testing.T) {
 	tools := map[string]mcp.Tool{}
 	for _, tl := range svc.Tools() {
 		tools[tl.Name] = tl
-		if !tl.ReadOnly || len(tl.Modes) != 6 {
+		if !tl.ReadOnly || len(tl.Modes) != 7 { // six scenarios and the personal agent of Nabu
 			t.Fatalf("tool %s is offered read-only in every mode", tl.Name)
 		}
 	}

@@ -13,7 +13,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/GreenOnGrey/hammurapi-core/internal/apperr"
 	"github.com/GreenOnGrey/hammurapi-core/internal/cycledata"
+	"github.com/GreenOnGrey/hammurapi-core/internal/domain"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/workflows"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/events"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/executor"
@@ -60,6 +62,9 @@ type TaskSpec struct {
 
 // StartTask creates an agent task and its codegen_task run.
 func StartTask(ctx context.Context, q postgres.Querier, s TaskSpec) (uuid.UUID, error) {
+	if domain.AgentDisabled() {
+		return uuid.Nil, apperr.AgentDisabled()
+	}
 	id := uuid.New()
 	runID, err := workflows.Start(ctx, q, TaskKind, id, s.Parent, "queued", map[string]any{"type": s.Type})
 	if err != nil {

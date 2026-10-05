@@ -40,13 +40,32 @@ const Effect = "agent.discovery"
 
 // Start starts Discovery of an issue; an already running Discovery is kept.
 // reason is shown to the agent (e.g. the rollback of a release).
+//
+// Without the agent (FTR.HMR.CMN-0006 R9) no run is created: the issue goes to
+// verification with an empty document, the expert fills value and measure.
 func Start(ctx context.Context, q postgres.Querier, issueID uuid.UUID, reason map[string]any) error {
+	if domain.AgentDisabled() {
+		var exists bool
+		if err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM discovery_docs WHERE issue_id = $1)`, issueID).Scan(&exists); err != nil {
+			return err
+		}
+		cd := cycledata.New(q)
+		if !exists {
+			if err := cd.SaveDiscovery(ctx, &cycledata.Discovery{IssueID: issueID, Content: EmptyTemplate}, nil, false, nil); err != nil {
+				return err
+			}
+		}
+		return cd.SetIssueStatus(ctx, issueID, domain.IssueVerification)
+	}
 	_, err := workflows.Start(ctx, q, Kind, issueID, nil, "queued", reason)
 	if errors.Is(err, workflows.ErrActiveRun) {
 		return nil
 	}
 	return err
 }
+
+// EmptyTemplate is the Discovery document of the mode without the agent.
+const EmptyTemplate = "## Ценность\n\n## Как измерим\n"
 
 // Cancel cancels the active Discovery of an issue (rejected, merged).
 func Cancel(ctx context.Context, q postgres.Querier, issueID uuid.UUID) error {
@@ -309,6 +328,10 @@ func (s *Service) Get(ctx context.Context, key string) (*View, error) {
 
 // AgentEdit saves a Discovery edit made by the agent in the chat of an issue (R5).
 func (s *Service) AgentEdit(ctx context.Context, p *domain.Principal, key string, in agent.DiscoveryInput) error {
+	return s.edit(ctx, p, key, in, true)
+}
+
+func (s *Service) edit(ctx context.Context, p *domain.Principal, key string, in agent.DiscoveryInput, isAgent bool) error {
 	is, err := s.load(ctx, key)
 	if err != nil {
 		return err
@@ -328,7 +351,7 @@ func (s *Service) AgentEdit(ctx context.Context, p *domain.Principal, key string
 		if err := Cancel(ctx, tx, is.ID); err != nil {
 			return err
 		}
-		return Save(ctx, tx, is, in, true, &p.UserID)
+		return Save(ctx, tx, is, in, isAgent, &p.UserID)
 	})
 	if err != nil {
 		return err
@@ -337,8 +360,33 @@ func (s *Service) AgentEdit(ctx context.Context, p *domain.Principal, key string
 	return nil
 }
 
+// Edit saves a Discovery edit made by an expert of the domain
+// (PUT /issues/{key}/discovery, FTR.HMR.CMN-0006 tech §5).
+func (s *Service) Edit(ctx context.Context, p *domain.Principal, key string, in agent.DiscoveryInput) error {
+	return s.edit(ctx, p, key, in, false)
+}
+
 // Routes mounts the Discovery endpoints.
 func (s *Service) Routes(r chi.Router) {
+	r.Put("/issues/{key}/discovery", httpx.Handler(func(w http.ResponseWriter, r *http.Request) error {
+		p, err := httpx.MustPrincipal(r)
+		if err != nil {
+			return err
+		}
+		var in agent.DiscoveryInput
+		if err := httpx.Decode(r, &in); err != nil {
+			return err
+		}
+		if err := s.Edit(r.Context(), p, chi.URLParam(r, "key"), in); err != nil {
+			return err
+		}
+		v, err := s.Get(r.Context(), chi.URLParam(r, "key"))
+		if err != nil {
+			return err
+		}
+		httpx.JSON(w, 200, v)
+		return nil
+	}))
 	r.Get("/issues/{key}/discovery", httpx.Handler(func(w http.ResponseWriter, r *http.Request) error {
 		v, err := s.Get(r.Context(), chi.URLParam(r, "key"))
 		if err != nil {

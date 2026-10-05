@@ -368,6 +368,9 @@ type AgentSession struct {
 // access to the repository. After an operator failure the task resumes once
 // in a new session (RUN-07).
 func runAgent(ctx context.Context, c *client, cfg Config, d *Description, root string) (string, agent.Usage, error) {
+	if d.AgentBackend == "nabu" {
+		return runAgentNabu(ctx, c, cfg, d, root)
+	}
 	var usage agent.Usage
 	tok := make([]byte, 24)
 	_, _ = rand.Read(tok)
