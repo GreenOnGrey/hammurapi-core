@@ -219,3 +219,21 @@ func TestChatEventsBridge(t *testing.T) {
 		t.Fatal("the bridge stays after the last tab closed")
 	}
 }
+
+// The transfer passes the git source of skills only when /agent/skills has skills.
+func TestSkillsSource(t *testing.T) {
+	for _, snap := range []string{"", "null", "[]"} {
+		if sk := skillsSource(json.RawMessage(snap), "org/specs", "main"); sk != nil {
+			t.Fatalf("snapshot %q: %v", snap, sk)
+		}
+	}
+	snap := json.RawMessage(`[{"name":"review","scenarios":["codegen"]}]`)
+	if sk := skillsSource(snap, "", "main"); sk != nil {
+		t.Fatalf("without the repository: %v", sk)
+	}
+	sk := skillsSource(snap, "org/specs", "main")
+	as, _ := sk["assignments"].(map[string][]string)
+	if sk["repo"] != "org/specs" || sk["path"] != "agent/skills" || sk["ref"] != "main" || len(as["review"]) != 1 || as["review"][0] != "codegen" {
+		t.Fatalf("%v", sk)
+	}
+}

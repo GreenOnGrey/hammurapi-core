@@ -269,20 +269,31 @@ func (s *Service) ImportBody(ctx context.Context) (map[string]any, error) {
 	}
 	rows.Close()
 	body["mcp"] = mcp
-	assignments := map[string][]string{}
 	var skills json.RawMessage
-	if err := s.Pool.QueryRow(ctx, `SELECT skills FROM agent_skill_snapshots ORDER BY created_at DESC LIMIT 1`).Scan(&skills); err == nil {
-		var list []struct {
-			Name      string   `json:"name"`
-			Scenarios []string `json:"scenarios"`
-		}
-		_ = json.Unmarshal(skills, &list)
-		for _, sk := range list {
-			assignments[sk.Name] = sk.Scenarios
-		}
+	_ = s.Pool.QueryRow(ctx, `SELECT skills FROM agent_skill_snapshots ORDER BY created_at DESC LIMIT 1`).Scan(&skills)
+	if sk := skillsSource(skills, s.SkillsRepo, s.DefaultBranch); sk != nil {
+		body["skills"] = sk
 	}
-	body["skills"] = map[string]any{"repo": s.SkillsRepo, "path": "agent/skills", "ref": s.DefaultBranch, "assignments": assignments}
 	return body, nil
+}
+
+// skillsSource is the git source of skills for Nabu with their scenarios, or
+// nil when the latest snapshot of /agent/skills has no skills: Nabu would
+// create a catalog item for a directory that does not exist.
+func skillsSource(snapshot json.RawMessage, repo, ref string) map[string]any {
+	var list []struct {
+		Name      string   `json:"name"`
+		Scenarios []string `json:"scenarios"`
+	}
+	_ = json.Unmarshal(snapshot, &list)
+	if len(list) == 0 || repo == "" {
+		return nil
+	}
+	assignments := map[string][]string{}
+	for _, sk := range list {
+		assignments[sk.Name] = sk.Scenarios
+	}
+	return map[string]any{"repo": repo, "path": "agent/skills", "ref": ref, "assignments": assignments}
 }
 
 // Migrate transfers the settings and binds the scenarios to the created
