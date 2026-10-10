@@ -109,6 +109,7 @@ func Tools(d ToolDeps) []mcp.Tool {
 			Name:        "list_issues",
 			Description: "List issues (Ideas and Problems) with their status. Optional filters: query (title or key substring), domain key, status (open | accepted | resolved | closed | all).",
 			Modes:       research,
+			ReadOnly:    true,
 			InputSchema: schema(map[string]any{
 				"query": map[string]any{"type": "string"}, "domain": map[string]any{"type": "string"},
 				"status": map[string]any{"type": "string", "enum": []string{"open", "accepted", "resolved", "closed", "all"}},
@@ -137,6 +138,7 @@ func Tools(d ToolDeps) []mcp.Tool {
 			Name:        "read_issue",
 			Description: "Read an issue with its description and the current Discovery document.",
 			Modes:       research,
+			ReadOnly:    true,
 			InputSchema: schema(map[string]any{"key": map[string]any{"type": "string"}}, "key"),
 			Handler: func(ctx context.Context, g mcp.Grant, raw json.RawMessage) (string, error) {
 				var a struct{ Key string }
@@ -170,7 +172,8 @@ func Tools(d ToolDeps) []mcp.Tool {
 			Name: "list_features",
 			Description: "List features (solutions) with their phase and gate statuses. Optional filters: query (title or key substring), " +
 				"status (active | released | rolled_back | all), domain key.",
-			Modes: research,
+			Modes:    research,
+			ReadOnly: true,
 			InputSchema: schema(map[string]any{
 				"query":  map[string]any{"type": "string"},
 				"status": map[string]any{"type": "string", "enum": []string{"active", "released", "rolled_back", "all"}},
@@ -213,6 +216,7 @@ func Tools(d ToolDeps) []mcp.Tool {
 			Name:        "search_specs",
 			Description: "Full-text search in specification documents merged to the default branch, plus feature titles. Use it to find where something is already described.",
 			Modes:       research,
+			ReadOnly:    true,
 			InputSchema: schema(map[string]any{"query": map[string]any{"type": "string"}}, "query"),
 			Handler: func(ctx context.Context, g mcp.Grant, raw json.RawMessage) (string, error) {
 				var a struct{ Query string }
@@ -249,6 +253,7 @@ func Tools(d ToolDeps) []mcp.Tool {
 			Name:        "read_spec",
 			Description: "Read the current markdown of a feature's gate document.",
 			Modes:       readers,
+			ReadOnly:    true,
 			InputSchema: schema(map[string]any{"uniqueId": map[string]any{"type": "string"}, "area": areaProp}, "uniqueId", "area"),
 			Handler: func(ctx context.Context, g mcp.Grant, raw json.RawMessage) (string, error) {
 				var a struct {
@@ -280,6 +285,7 @@ func Tools(d ToolDeps) []mcp.Tool {
 			Name:        "read_rules",
 			Description: "Read the rules template of an area: kind=template for regular features, kind=fix for fix features.",
 			Modes:       readers,
+			ReadOnly:    true,
 			InputSchema: schema(map[string]any{"area": areaProp, "kind": map[string]any{"type": "string", "enum": []string{"template", "fix"}}}, "area"),
 			Handler: func(ctx context.Context, g mcp.Grant, raw json.RawMessage) (string, error) {
 				var a struct{ Area, Kind string }
@@ -299,6 +305,7 @@ func Tools(d ToolDeps) []mcp.Tool {
 			Name:        "list_services",
 			Description: "List services of the catalog (Backstage components or the admin list) with their system, repository and autonomy level.",
 			Modes:       readers,
+			ReadOnly:    true,
 			InputSchema: schema(map[string]any{"system": map[string]any{"type": "string", "description": "DOMAIN/SYSTEM"}, "query": map[string]any{"type": "string"}}),
 			Handler: func(ctx context.Context, g mcp.Grant, raw json.RawMessage) (string, error) {
 				var a struct{ System, Query string }
@@ -325,6 +332,7 @@ func Tools(d ToolDeps) []mcp.Tool {
 			Name:        "read_service_file",
 			Description: "Read a file or list a directory in a service repository (default branch), to understand the code. path='' lists the root.",
 			Modes:       codeRead,
+			ReadOnly:    true,
 			InputSchema: schema(map[string]any{"service": map[string]any{"type": "string"}, "path": map[string]any{"type": "string"}}, "service"),
 			Handler: func(ctx context.Context, g mcp.Grant, raw json.RawMessage) (string, error) {
 				var a struct{ Service, Path string }
@@ -393,6 +401,7 @@ func Tools(d ToolDeps) []mcp.Tool {
 			Name:        "test_metric_query",
 			Description: "Dry-run a success-metric query in a configured read-only metric source and return the current value or the source error.",
 			Modes:       []string{mcp.ModeSpec, mcp.ModeDiscovery},
+			ReadOnly:    true,
 			InputSchema: schema(map[string]any{"source": map[string]any{"type": "string"}, "query": map[string]any{"type": "string"}}, "source", "query"),
 			Handler: func(ctx context.Context, g mcp.Grant, raw json.RawMessage) (string, error) {
 				var a struct{ Source, Query string }
