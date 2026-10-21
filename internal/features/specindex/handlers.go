@@ -65,11 +65,14 @@ func (s *Service) Routes(r chi.Router) {
 	})
 }
 
-// raw serves a file of an area (arch §8): images inline with nosniff and a
-// restrictive CSP; HTML only as JSON for an iframe srcdoc in preview mode,
-// otherwise — like every other type — as a download.
+// raw serves a file of an area (FTR.HMR.CMN-0005 arch §8): images inline with
+// nosniff and a restrictive CSP; HTML in view mode as a page sandboxed by CSP
+// into an opaque origin (FTR.HMR.SPEC-0001 arch §6), in preview mode as JSON for
+// an iframe srcdoc (kept for one release), otherwise — like every other type —
+// as a download.
 func (s *Service) raw(w http.ResponseWriter, r *http.Request) error {
-	preview := r.URL.Query().Get("mode") == "preview"
+	mode := r.URL.Query().Get("mode")
+	preview := mode == "preview" || mode == "view"
 	f, data, err := s.RawFile(r.Context(), chi.URLParam(r, "key"), chi.URLParam(r, "area"), r.URL.Query().Get("name"))
 	if err != nil {
 		return err
@@ -83,6 +86,12 @@ func (s *Service) raw(w http.ResponseWriter, r *http.Request) error {
 	case strings.HasPrefix(f.MimeType, "image/") && previewable(f.MimeType):
 		w.Header().Set("Content-Type", f.MimeType)
 		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")
+		_, _ = w.Write(data)
+	case f.MimeType == "text/html" && mode == "view":
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": f.Name}))
+		w.Header().Set("Content-Security-Policy", "sandbox allow-scripts")
+		w.Header().Set("Referrer-Policy", "no-referrer")
 		_, _ = w.Write(data)
 	case f.MimeType == "text/html" && preview:
 		httpx.JSON(w, http.StatusOK, map[string]string{"html": string(data)})

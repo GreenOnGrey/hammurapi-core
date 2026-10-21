@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -181,7 +182,7 @@ type Document struct {
 	TOC        []Heading   `json:"toc"`
 	BlobSHA    string      `json:"blobSha"`
 	Commit     string      `json:"commit"`
-	HistoryURL string      `json:"historyUrl"`
+	HistoryURL string      `json:"historyUrl,omitempty"`
 	Feature    FeatureInfo `json:"feature"`
 }
 
@@ -224,11 +225,20 @@ func (s *Service) Document(ctx context.Context, key, area string) (*Document, er
 }
 
 // historyURL is the history of a file at the provider: the commit URL of the
-// provider with /commit/<sha> replaced by /commits/<branch>/<path>.
+// provider with /commit/<sha> replaced by /commits/<branch>/<path>. Empty when
+// the path or the form of the commit URL is unknown: no link is better than a
+// broken one (FTR.HMR.SPEC-0001 R13).
 func (s *Service) historyURL(path string) string {
-	const marker = "0000000000000000000000000000000000000000"
-	u := s.git.CommitURL(marker)
-	return strings.Replace(u, "/commit/"+marker, "/commits/"+s.cfg.DefaultBranch+"/"+path, 1)
+	return historyURL(s.git.CommitURL(marker), s.cfg.DefaultBranch, path)
+}
+
+const marker = "0000000000000000000000000000000000000000"
+
+func historyURL(commitURL, branch, path string) string {
+	if path == "" || !strings.Contains(commitURL, "/commit/"+marker) {
+		return ""
+	}
+	return strings.Replace(commitURL, "/commit/"+marker, "/commits/"+branch+"/"+path, 1)
 }
 
 func (s *Service) featureInfo(ctx context.Context, key string) (*FeatureInfo, error) {
@@ -298,7 +308,15 @@ type File struct {
 	Size        int64  `json:"size"`
 	MimeType    string `json:"mimeType"`
 	Previewable bool   `json:"previewable"`
-	blobSHA     string
+	// ViewURL opens the file as a page of its own in an opaque origin
+	// (FTR.HMR.SPEC-0001 R6, arch §6); a path of the API, without the host.
+	ViewURL string `json:"viewUrl,omitempty"`
+	blobSHA string
+}
+
+func viewURL(key, area, name string) string {
+	return "/api/v1/spec/files/" + url.PathEscape(key) + "/" + url.PathEscape(area) + "/raw?" +
+		url.Values{"name": {name}, "mode": {"view"}}.Encode()
 }
 
 func previewable(mt string) bool {
@@ -324,6 +342,9 @@ func (s *Service) Files(ctx context.Context, key, area string) ([]File, error) {
 			return nil, err
 		}
 		f.Previewable = previewable(f.MimeType) && f.Size <= s.cfg.PreviewMaxBytes
+		if f.Previewable {
+			f.ViewURL = viewURL(key, area, f.Name)
+		}
 		out = append(out, f)
 	}
 	return out, rows.Err()
