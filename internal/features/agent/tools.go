@@ -36,6 +36,16 @@ type DiscoveryInput struct {
 	RequestIDs []uuid.UUID `json:"-"`
 }
 
+// DiscoveryRule tells the personal agent of a user that it does not write the
+// Discovery document (FTR.HMR.DISC-0001 R7): the agent-researcher does, by an
+// instruction. Without the tool the agent says so instead of writing the
+// document itself or putting it into a file.
+const DiscoveryRule = "\n--- How Discovery is revised ---\n" +
+	"The Discovery document is written only by the agent-researcher of Hammurapi. Never write or rewrite it yourself, " +
+	"not in the chat and not in a file. To change it, clear up with the user what to change, then call request_discovery_revision " +
+	"with a self-contained instruction. If you do not have that tool, tell the user that the administrator of Nabu has to allow " +
+	"request_discovery_revision in the Hammurapi connection of the catalog.\n"
+
 // ToolDeps are the dependencies of the MCP tools.
 type ToolDeps struct {
 	Store         specdata.Store
@@ -197,6 +207,9 @@ func Tools(d ToolDeps) []mcp.Tool {
 					if doc.Measure != nil {
 						fmt.Fprintf(&b, "measure: source=%s query=%q target=%s window=%s\n", doc.Measure.Source, doc.Measure.Query, doc.Measure.Target, doc.Measure.Window)
 					}
+				}
+				if g.Mode == mcp.ModeNabu {
+					b.WriteString(DiscoveryRule)
 				}
 				return b.String(), nil
 			},

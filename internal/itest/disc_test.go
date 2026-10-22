@@ -456,6 +456,23 @@ func TestDiscoveryRevisions(t *testing.T) {
 		t.Fatalf("history: %+v", revs[0])
 	}
 
+	// RQ-02a: read_issue tells the personal agent that it does not write Discovery itself
+	var readIssue mcp.Tool
+	for _, tl := range agent.Tools(agent.ToolDeps{Store: specdata.NewPG(pool)}) {
+		if tl.Name == "read_issue" {
+			readIssue = tl
+		}
+	}
+	arg, _ := json.Marshal(map[string]string{"key": is.Key})
+	out, err := readIssue.Handler(ctx, mcp.Grant{UserID: r.anna.UserID, Mode: mcp.ModeNabu}, arg)
+	must(t, err)
+	if !strings.Contains(out, agent.DiscoveryRule) || !strings.Contains(out, "request_discovery_revision") {
+		t.Fatalf("RQ-02a: %s", out)
+	}
+	if out, _ := readIssue.Handler(ctx, mcp.Grant{Mode: mcp.ModeDiscovery, Subject: is.ID}, arg); strings.Contains(out, agent.DiscoveryRule) {
+		t.Fatal("RQ-02a: the researcher gets the rule of the personal agent")
+	}
+
 	// RQ-11, NT-02, NT-03: instructions during a run wait and go together
 	first, err := ask(r.anna, r.grant(r.anna, annaConv, ch), "Добавить юристов")
 	must(t, err)
