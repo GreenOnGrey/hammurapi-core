@@ -56,6 +56,9 @@ type Issue struct {
 	RolledBackRelease   *string            `json:"rolledBackRelease"`
 	CreatedAt           time.Time          `json:"createdAt"`
 	UpdatedAt           time.Time          `json:"updatedAt"`
+	// Estimate is the summary of the draft estimate in the Research list
+	// (FTR.HMR.DISC-0001 R17); set by ListIssues only.
+	Estimate *EstimateTotals `json:"estimate,omitempty"`
 }
 
 // Measure is "how we will measure" from Discovery.
@@ -89,17 +92,35 @@ type Discovery struct {
 	Systems          []string   `json:"systems"`
 	Services         []string   `json:"services"`
 	ProblemFeature   *string    `json:"problemFeature"`
-	Revision         int        `json:"revision"`
-	UpdatedAt        time.Time  `json:"updatedAt"`
+	// Estimate is the draft estimate of the work (FTR.HMR.DISC-0001 R15).
+	Estimate *Estimate `json:"estimate"`
+	// ChangeSummary is what the researcher changed for the instructions of
+	// the revision (FTR.HMR.DISC-0001 tech §4.3).
+	ChangeSummary *string   `json:"changeSummary"`
+	Revision      int       `json:"revision"`
+	UpdatedAt     time.Time `json:"updatedAt"`
+	// RequestIDs are the instructions the revision answers (written only).
+	RequestIDs []uuid.UUID `json:"-"`
 }
 
 // Revision is a stored version of a Discovery document.
 type Revision struct {
-	Revision  int       `json:"revision"`
-	Content   string    `json:"content"`
-	IsAgent   bool      `json:"isAgent"`
-	Actor     *string   `json:"actor"`
-	CreatedAt time.Time `json:"createdAt"`
+	Revision      int       `json:"revision"`
+	Content       string    `json:"content"`
+	IsAgent       bool      `json:"isAgent"`
+	Actor         *string   `json:"actor"`
+	Estimate      *Estimate `json:"estimate"`
+	ChangeSummary *string   `json:"changeSummary"`
+	Requests      []RevReq  `json:"requests"`
+	CreatedAt     time.Time `json:"createdAt"`
+}
+
+// RevReq is an instruction a revision answers, as the history shows it
+// (FTR.HMR.DISC-0001 design §3.5): the author and the first characters.
+type RevReq struct {
+	ID           uuid.UUID `json:"id"`
+	Author       *string   `json:"author"`
+	Instructions string    `json:"instructions"`
 }
 
 // Service is a product service (Backstage Component).

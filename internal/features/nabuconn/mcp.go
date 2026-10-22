@@ -59,5 +59,5 @@ func (h *MCPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, err)
 		return
 	}
-	h.Server.Serve(w, r, mcp.Grant{UserID: uid, Mode: mcp.ModeNabu})
+	h.Server.Serve(w, r, mcp.Grant{UserID: uid, Mode: mcp.ModeNabu, Conversation: claims.Conversation, Channel: claims.Channel})
 }

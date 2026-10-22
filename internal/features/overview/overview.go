@@ -161,6 +161,15 @@ type Card struct {
 	Total   int      `json:"total"`
 	Blocked bool     `json:"blocked"`
 	Domain  string   `json:"domain"`
+	// Estimate is the days and person-hours of the draft estimate of an
+	// issue (FTR.HMR.DISC-0001 R17); the cost of agents is not on cards.
+	Estimate *CardEstimate `json:"estimate,omitempty"`
+}
+
+// CardEstimate is the estimate on the card of an issue.
+type CardEstimate struct {
+	Days        int     `json:"days"`
+	PersonHours float64 `json:"personHours"`
 }
 
 // Overview is GET /overview.
@@ -184,17 +193,27 @@ func (s *Service) Overview(ctx context.Context, userID uuid.UUID, dom string) (*
 	}
 	out := &Overview{Issues: []Card{}, Features: []Card{}, Releases: []Card{}}
 	rows, err := s.pool.Query(ctx, `SELECT i.key, i.title, i.type::text, i.status::text, d.key,
-			EXISTS (SELECT 1 FROM workflow_runs w WHERE w.subject_id = i.id AND w.kind = 'discovery' AND w.state = 'blocked')
-		FROM issues i JOIN domains d ON d.id = i.domain_id
+			EXISTS (SELECT 1 FROM workflow_runs w WHERE w.subject_id = i.id AND w.kind = 'discovery' AND w.state = 'blocked'),
+			(dd.estimate->>'days')::int,
+			(SELECT sum((p->>'personHours')::numeric)::float8 FROM jsonb_array_elements(dd.estimate->'people') p)
+		FROM issues i JOIN domains d ON d.id = i.domain_id LEFT JOIN discovery_docs dd ON dd.issue_id = i.id
 		WHERE i.status IN ('new','discovery','verification')`+domainFilter("i.domain_id", 2)+` ORDER BY i.created_at DESC LIMIT 200`, userID, dom)
 	if err != nil {
 		return nil, err
 	}
 	for rows.Next() {
 		c := Card{Issues: []string{}}
-		if err := rows.Scan(&c.Key, &c.Title, &c.Type, &c.Status, &c.Domain, &c.Blocked); err != nil {
+		var days *int
+		var hours *float64
+		if err := rows.Scan(&c.Key, &c.Title, &c.Type, &c.Status, &c.Domain, &c.Blocked, &days, &hours); err != nil {
 			rows.Close()
 			return nil, err
+		}
+		if days != nil {
+			c.Estimate = &CardEstimate{Days: *days}
+			if hours != nil {
+				c.Estimate.PersonHours = *hours
+			}
 		}
 		out.Issues = append(out.Issues, c)
 	}

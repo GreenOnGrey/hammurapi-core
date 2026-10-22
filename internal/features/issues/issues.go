@@ -37,6 +37,9 @@ type Service struct {
 	metrics  MetricTester
 	events   events.Publisher
 	now      func() time.Time
+	// KeyChanged renames the topics of an issue in Nabu after a move
+	// (FTR.HMR.DISC-0001 R3); nil — no topics.
+	KeyChanged func(ctx context.Context, issueID uuid.UUID)
 }
 
 // NewService creates the service.
@@ -218,9 +221,11 @@ func (s *Service) Get(ctx context.Context, p *domain.Principal, key string) (*Ca
 	}
 	expert := p.IsExpertOf(is.Domain)
 	c.Permissions = Permissions{
-		Verify:   expert && is.Status == domain.IssueVerification,
-		Reopen:   expert && is.Status == domain.IssueRejected,
-		Discover: expert && !domain.AgentDisabled() && (is.Status == domain.IssueNew || is.Status == domain.IssueDiscovery),
+		Verify: expert && is.Status == domain.IssueVerification,
+		Reopen: expert && is.Status == domain.IssueRejected,
+		Discover: expert && !domain.AgentDisabled() && (is.Status == domain.IssueNew || is.Status == domain.IssueDiscovery ||
+			// FTR.HMR.DISC-0001 R13: a failed revision leaves the issue in verification with «Retry»
+			is.Status == domain.IssueVerification && discovery.Blocked(ctx, s.store.Q(), is.ID)),
 	}
 	return c, nil
 }
@@ -335,6 +340,11 @@ func (s *Service) Accept(ctx context.Context, p *domain.Principal, key string, i
 		if err := tcd.SetIssueStatus(ctx, is.ID, domain.IssueAccepted); err != nil {
 			return err
 		}
+		// FTR.HMR.DISC-0001 R20: the estimate goes to the feature as a reference
+		if _, err := tx.Q().Exec(ctx, `UPDATE features SET estimate = (SELECT estimate FROM discovery_docs WHERE issue_id = $1) WHERE id = $2`,
+			is.ID, f.ID); err != nil {
+			return err
+		}
 		featureKey = f.UniqueID
 		return tcd.AddActivity(ctx, "issue", is.ID, "accepted", &p.UserID, false, map[string]any{"feature": f.UniqueID})
 	})
@@ -427,10 +437,8 @@ func (s *Service) Rediscover(ctx context.Context, p *domain.Principal, key strin
 		return apperr.Conflict("issue_closed", "Discovery cannot run in status "+string(is.Status))
 	}
 	err = s.store.InTx(ctx, func(tx specdata.Store) error {
-		if err := discovery.Cancel(ctx, tx.Q(), is.ID); err != nil {
-			return err
-		}
-		return discovery.Start(ctx, tx.Q(), is.ID, nil)
+		// FTR.HMR.DISC-0001 R13: «Retry» runs the instructions of the failed run again
+		return discovery.Restart(ctx, tx.Q(), is.ID)
 	})
 	if err != nil {
 		return err
@@ -524,10 +532,16 @@ func (s *Service) Move(ctx context.Context, p *domain.Principal, key, target str
 		return "", err
 	}
 	s.publish(ctx, newKey, is.Status)
+	if s.KeyChanged != nil {
+		s.KeyChanged(ctx, is.ID)
+	}
 	return newKey, nil
 }
 
 // ─── HTTP ────────────────────────────────────────────────────────────
+
+// maxSorted bounds the Research list sorted by the estimate.
+const maxSorted = 500
 
 // Routes mounts /api/v1/issues.
 func (s *Service) Routes(r chi.Router) {
@@ -541,12 +555,23 @@ func (s *Service) Routes(r chi.Router) {
 			return err
 		}
 		q := r.URL.Query()
+		sort := q.Get("sort")
+		if sort != "" {
+			page.Cursor, page.Limit = nil, maxSorted // a sorted list is one page (FTR.HMR.DISC-0001 tech §3.3)
+		}
 		items, err := s.List(r.Context(), cycledata.IssueFilter{UserID: p.UserID, Domain: q.Get("domain"), Type: q.Get("type"),
-			Status: q.Get("status"), Source: q.Get("source"), Query: q.Get("q"), Page: page})
+			Status: q.Get("status"), Source: q.Get("source"), Query: q.Get("q"), Page: page, Sort: sort})
+		if errors.Is(err, cycledata.ErrInvalidSort) {
+			return apperr.Unprocessable("invalid_sort", "sort is agentUsd, personHours or days, with - for the descending order").With("field", "sort")
+		}
 		if err != nil {
 			return err
 		}
-		httpx.JSON(w, 200, httpx.NewList(items, page.Limit, func(i cycledata.Issue) (time.Time, string) { return i.CreatedAt, i.ID.String() }))
+		list := httpx.NewList(items, page.Limit, func(i cycledata.Issue) (time.Time, string) { return i.CreatedAt, i.ID.String() })
+		if sort != "" {
+			list.NextCursor = nil
+		}
+		httpx.JSON(w, 200, list)
 		return nil
 	}))
 	r.Post("/issues", httpx.Handler(func(w http.ResponseWriter, r *http.Request) error {

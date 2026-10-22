@@ -77,6 +77,11 @@ var (
 	WorkflowTransitionDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name: "hammurapi_workflow_transition_duration_seconds", Help: "Duration of workflow transitions.", Buckets: prometheus.DefBuckets,
 	}, []string{"kind", "step"})
+	// EffectsFailed counts effects that failed for good: out of attempts or a
+	// permanent error (FTR.HMR.DISC-0001 arch §8: the alert on notices).
+	EffectsFailed = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "hammurapi_workflow_effects_failed_total", Help: "Effects of workflows that failed for good, by effect.",
+	}, []string{"effect"})
 	WorkflowBlocked = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "hammurapi_workflow_blocked_total", Help: "Workflow runs that became blocked.",
 	}, []string{"kind", "reason"})
@@ -95,6 +100,20 @@ var (
 	ReleaseRollbacks = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "hammurapi_release_rollbacks_total", Help: "Rolled back releases.",
 	})
+	// FTR.HMR.DISC-0001 arch §8.
+	DiscoveryRequests = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "hammurapi_discovery_requests_total", Help: "Instructions to the researcher by the state they reached (queued, running, done, failed).",
+	}, []string{"state"})
+	DiscoveryRequestDuration = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name: "hammurapi_discovery_request_duration_seconds", Help: "From an instruction to the revision that answers it.",
+		Buckets: []float64{60, 180, 300, 600, 1200, 1800, 3600, 7200},
+	})
+	NabuNotices = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "hammurapi_nabu_notice_total", Help: "Attempts to send notices of Hammurapi to the topics of users by result (sent, gone, error); an error is retried.",
+	}, []string{"result"})
+	IssueTopicsCreated = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "hammurapi_issue_topics_created_total", Help: "Topics of issues created in Nabu by a first message.",
+	})
 )
 
 func init() {
@@ -104,7 +123,8 @@ func init() {
 		HTTPRequests, HTTPDuration, GitAPIErrors, WebhookEvents, KafkaLag,
 		AgentSessions, AgentProcessStarts, LLMRequests, LLMErrors, LLMTokens, LLMCost, GitProviderUp, GateTransitions,
 		SpecScanRuns, SpecScanDuration, SpecIndexIssuesOpen, SpecDocuments, SpecIndexedFeatures,
-		WorkflowRuns, WorkflowTransitionDuration, WorkflowBlocked, RunnerTasks, RunnerTaskDuration,
+		WorkflowRuns, WorkflowTransitionDuration, WorkflowBlocked, EffectsFailed, RunnerTasks, RunnerTaskDuration,
 		RunnerTokens, DeployRuns, ReleaseRollbacks,
+		DiscoveryRequests, DiscoveryRequestDuration, NabuNotices, IssueTopicsCreated,
 	)
 }

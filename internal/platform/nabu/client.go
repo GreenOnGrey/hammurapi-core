@@ -308,3 +308,54 @@ func (c *Client) Import(ctx context.Context, body any) (map[string]any, error) {
 	err := c.Do(ctx, http.MethodPost, "/client/v1/import/hammurapi-agent", "", body, &out)
 	return out, err
 }
+
+// Conversation is a conversation of a user in Nabu.
+type Conversation struct {
+	ID         string     `json:"id"`
+	Kind       string     `json:"kind"`
+	Title      *string    `json:"title"`
+	ArchivedAt *time.Time `json:"archivedAt"`
+}
+
+// IsNotFound reports a 404 of Nabu (a conversation that is gone).
+func IsNotFound(err error) bool {
+	var ae *APIError
+	return errors.As(err, &ae) && ae.Status == http.StatusNotFound
+}
+
+// CreateTopic creates a topic of the user (FTR.HMR.DISC-0001 R2).
+func (c *Client) CreateTopic(ctx context.Context, email, title string) (*Conversation, error) {
+	var out Conversation
+	err := c.Do(ctx, http.MethodPost, "/client/v1/me/conversations", email, map[string]string{"title": title}, &out)
+	return &out, err
+}
+
+// Conversation reads a conversation of the user.
+func (c *Client) Conversation(ctx context.Context, email, id string) (*Conversation, error) {
+	var out Conversation
+	err := c.Do(ctx, http.MethodGet, "/client/v1/me/conversations/"+url.PathEscape(id), email, nil, &out)
+	return &out, err
+}
+
+// RenameTopic renames a topic of the user (FTR.HMR.DISC-0001 R3).
+func (c *Client) RenameTopic(ctx context.Context, email, id, title string) error {
+	return c.Do(ctx, http.MethodPatch, "/client/v1/me/conversations/"+url.PathEscape(id), email, map[string]string{"title": title}, nil)
+}
+
+// PostMessage writes a message of the user to a conversation; out gets the answer of Nabu.
+func (c *Client) PostMessage(ctx context.Context, email, id string, in, out any) error {
+	return c.Do(ctx, http.MethodPost, "/client/v1/me/conversations/"+url.PathEscape(id)+"/messages", email, in, out)
+}
+
+// Notice is a notice of Hammurapi in a topic of a user (FTR.NAB.CHAT-0002 tech §2.1).
+type Notice struct {
+	Text           string `json:"text"`
+	Payload        any    `json:"payload,omitempty"`
+	IdempotencyKey string `json:"idempotencyKey"`
+}
+
+// PostNotice adds a notice to a topic of the user; a repeat with the same key
+// returns the stored one.
+func (c *Client) PostNotice(ctx context.Context, email, id string, n Notice) error {
+	return c.Do(ctx, http.MethodPost, "/client/v1/me/conversations/"+url.PathEscape(id)+"/notices", email, n, nil)
+}

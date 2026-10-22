@@ -35,6 +35,11 @@ type Claims struct {
 	Audience  string `json:"aud"`
 	ExpiresAt int64  `json:"exp"`
 	Email     string `json:"email"`
+	// Conversation and Channel name the turn of the agent that made a
+	// delegated call: its topic and the channel of the message that began it
+	// (FTR.NAB.CHAT-0002 R6); empty outside a turn.
+	Conversation string `json:"conv,omitempty"`
+	Channel      string `json:"ch,omitempty"`
 }
 
 // Errors of Verify (NB-06: 401).

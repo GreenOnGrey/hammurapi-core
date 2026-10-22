@@ -86,7 +86,11 @@ type Config struct {
 	NabuURL          string
 	NabuClientID     string
 	NabuClientSecret string
-	NabuJWKSCache    time.Duration
+	// NabuClientName is the name of the service client of Hammurapi in Nabu:
+	// Nabu names the channel of messages written here "client:<name>", and only
+	// that channel may give instructions to the researcher (FTR.HMR.DISC-0001 R6).
+	NabuClientName string
+	NabuJWKSCache  time.Duration
 	// How Nabu reaches the MCP of Hammurapi for service agents (callerMcp):
 	// the worker MCP for its scenarios and the internal /mcp for runner tasks.
 	NabuWorkerMCPURL string
@@ -207,6 +211,7 @@ func Load() (*Config, error) {
 		NabuURL:                 strings.TrimRight(env("NABU_URL", ""), "/"),
 		NabuClientID:            env("NABU_CLIENT_ID", ""),
 		NabuClientSecret:        env("NABU_CLIENT_SECRET", ""),
+		NabuClientName:          env("NABU_CLIENT_NAME", "hammurapi"),
 		DatabaseURL:             env("DATABASE_URL", ""),
 		KafkaBrokers:            splitList(env("KAFKA_BROKERS", ""), ","),
 		S3Endpoint:              env("S3_ENDPOINT", ""),

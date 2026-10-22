@@ -77,9 +77,21 @@ func script(r fakellm.Request) *fakellm.Reply {
 		if kv["type"] == "problem" {
 			content += "\n## Cause hypothesis\n\nA recent change broke the flow.\n"
 		}
-		return &fakellm.Reply{ToolCalls: []fakellm.ToolCall{{Name: mcp + "save_discovery", Args: map[string]any{
+		args := map[string]any{
 			"content": content, "value": title + " increases the value metric",
-			"measure": map[string]string{"source": source, "query": "sum(hammurapi_demo_value)", "target": "+5%", "window": "14d"}}}}}
+			"measure": map[string]string{"source": source, "query": "sum(hammurapi_demo_value)", "target": "+5%", "window": "14d"},
+			// FTR.HMR.DISC-0001 R15: the draft estimate — agents do the work, people take part
+			"estimate": map[string]any{
+				"agent": []map[string]any{{"stage": "spec", "usd": 9, "tokens": 1100000}, {"stage": "codegen", "usd": 26, "tokens": 3400000},
+					{"stage": "checks", "usd": 5, "tokens": 600000}},
+				"people": []map[string]any{{"stage": "spec", "expertise": "product", "personHours": 3}, {"stage": "spec", "expertise": "tech", "personHours": 2},
+					{"stage": "approval", "expertise": "product", "personHours": 1}, {"stage": "validation", "expertise": "tech", "personHours": 3},
+					{"stage": "release", "expertise": "product", "personHours": 1}},
+				"days": 9, "waitDays": 4, "confidence": "low", "basis": map[string]any{"features": []string{}, "judgement": true}}}
+		if strings.Contains(text, "New instructions of experts") {
+			args["changeSummary"] = "- Followed the instructions of the experts"
+		}
+		return &fakellm.Reply{ToolCalls: []fakellm.ToolCall{{Name: mcp + "save_discovery", Args: args}}}
 	case "generate_gates":
 		var calls []fakellm.ToolCall
 		reqs, services := requirements(text), servicesOf(text)

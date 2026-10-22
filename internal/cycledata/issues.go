@@ -3,6 +3,7 @@ package cycledata
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -201,6 +202,17 @@ type IssueFilter struct {
 	Source string
 	Query  string
 	Page   httpx.Page
+	// Sort orders by the estimate (FTR.HMR.DISC-0001 R17): agentUsd,
+	// personHours or days, "-" first for the descending order; issues without
+	// an estimate are last both ways. A sorted list has no cursor.
+	Sort string
+}
+
+// IssueSorts are the orders of the Research list by the estimate.
+var IssueSorts = map[string]string{
+	"agentUsd":    `(SELECT sum((a->>'usd')::numeric) FROM jsonb_array_elements(dd.estimate->'agent') a)`,
+	"personHours": `(SELECT sum((p->>'personHours')::numeric) FROM jsonb_array_elements(dd.estimate->'people') p)`,
+	"days":        `(dd.estimate->>'days')::int`,
 }
 
 // ListIssues lists issues, newest first.
@@ -241,41 +253,59 @@ func (d *DB) ListIssues(ctx context.Context, f IssueFilter) ([]Issue, error) {
 		p := arg("%" + q + "%")
 		where = append(where, "(i.title ILIKE "+p+" OR i.key ILIKE "+p+")")
 	}
-	if c := f.Page.Cursor; c != nil {
+	order := `i.created_at DESC, i.id::text DESC`
+	if f.Sort != "" {
+		expr, ok := IssueSorts[strings.TrimPrefix(f.Sort, "-")]
+		if !ok {
+			return nil, ErrInvalidSort
+		}
+		dir := "ASC"
+		if strings.HasPrefix(f.Sort, "-") {
+			dir = "DESC"
+		}
+		order = expr + " " + dir + " NULLS LAST, " + order
+	} else if c := f.Page.Cursor; c != nil {
 		where = append(where, "(i.created_at, i.id::text) < ("+arg(c.T)+", "+arg(c.ID)+")")
 	}
 	limit := f.Page.Limit
 	if limit <= 0 {
 		limit = 50
 	}
-	rows, err := d.q.Query(ctx, `SELECT `+issueCols+issueFrom+` WHERE `+strings.Join(where, " AND ")+
-		` ORDER BY i.created_at DESC, i.id::text DESC LIMIT `+arg(limit+1), args...)
+	rows, err := d.q.Query(ctx, `SELECT `+issueCols+`, dd.estimate`+issueFrom+` LEFT JOIN discovery_docs dd ON dd.issue_id = i.id WHERE `+
+		strings.Join(where, " AND ")+` ORDER BY `+order+` LIMIT `+arg(limit+1), args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var out []Issue
 	for rows.Next() {
-		is, err := scanIssue(rows)
-		if err != nil {
+		var is Issue
+		var estimate []byte
+		if err := rows.Scan(&is.ID, &is.Key, &is.DomainID, &is.Domain, &is.Number, &is.Type, &is.Title, &is.Description, &is.Source,
+			&is.SourceRef, &is.Status, &is.AuthorID, &is.Author, &is.MergedInto, &is.RejectReason, &is.RolledBackReleaseID,
+			&is.RolledBackRelease, &is.CreatedAt, &is.UpdatedAt, &estimate); err != nil {
 			return nil, err
 		}
-		out = append(out, *is)
+		is.Estimate = decodeEstimate(estimate).Totals()
+		out = append(out, is)
 	}
 	return out, rows.Err()
 }
+
+// ErrInvalidSort is an unknown order of the Research list (ES-14).
+var ErrInvalidSort = errors.New("invalid sort")
 
 // ─── Discovery ───────────────────────────────────────────────────────
 
 // Discovery loads the Discovery document (nil if not written yet).
 func (d *DB) Discovery(ctx context.Context, issueID uuid.UUID) (*Discovery, error) {
 	var doc Discovery
-	var measure, similar, systems, services []byte
+	var measure, similar, systems, services, estimate []byte
 	err := d.q.QueryRow(ctx, `SELECT dd.issue_id, dd.content, dd.value_text, dd.measure, dd.measure_checked_at, dd.similar_items, dd.systems,
-		dd.services, f.unique_id, dd.revision, dd.updated_at
+		dd.services, f.unique_id, dd.revision, dd.updated_at, dd.estimate, dd.change_summary
 		FROM discovery_docs dd LEFT JOIN features f ON f.id = dd.problem_feature_id WHERE dd.issue_id = $1`, issueID).
 		Scan(&doc.IssueID, &doc.Content, &doc.Value, &measure, &doc.MeasureCheckedAt, &similar, &systems, &services,
-			&doc.ProblemFeature, &doc.Revision, &doc.UpdatedAt)
+			&doc.ProblemFeature, &doc.Revision, &doc.UpdatedAt, &estimate, &doc.ChangeSummary)
 	if postgres.IsNoRows(err) {
 		return nil, nil
 	}
@@ -286,6 +316,7 @@ func (d *DB) Discovery(ctx context.Context, issueID uuid.UUID) (*Discovery, erro
 		doc.Measure = &Measure{}
 		_ = json.Unmarshal(measure, doc.Measure)
 	}
+	doc.Estimate = decodeEstimate(estimate)
 	_ = json.Unmarshal(similar, &doc.Similar)
 	_ = json.Unmarshal(systems, &doc.Systems)
 	_ = json.Unmarshal(services, &doc.Services)
@@ -314,22 +345,48 @@ func (d *DB) SaveDiscovery(ctx context.Context, doc *Discovery, problemFeatureID
 		}
 		return b
 	}
-	err := d.q.QueryRow(ctx, `INSERT INTO discovery_docs (issue_id, content, value_text, measure, similar_items, systems, services, problem_feature_id, revision, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,1,now())
+	var estimate []byte
+	if doc.Estimate != nil {
+		estimate, _ = json.Marshal(doc.Estimate)
+	}
+	err := d.q.QueryRow(ctx, `INSERT INTO discovery_docs (issue_id, content, value_text, measure, similar_items, systems, services, problem_feature_id,
+			estimate, change_summary, revision, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,1,now())
 		ON CONFLICT (issue_id) DO UPDATE SET content = EXCLUDED.content, value_text = EXCLUDED.value_text, measure = EXCLUDED.measure,
 			similar_items = EXCLUDED.similar_items, systems = EXCLUDED.systems, services = EXCLUDED.services,
 			problem_feature_id = EXCLUDED.problem_feature_id, measure_checked_at = CASE WHEN discovery_docs.measure = EXCLUDED.measure
 				THEN discovery_docs.measure_checked_at END,
+			estimate = EXCLUDED.estimate, change_summary = EXCLUDED.change_summary,
 			revision = discovery_docs.revision + 1, updated_at = now()
 		RETURNING revision, updated_at`,
-		doc.IssueID, doc.Content, doc.Value, measure, nz(doc.Similar), nz(doc.Systems), nz(doc.Services), problemFeatureID).
+		doc.IssueID, doc.Content, doc.Value, measure, nz(doc.Similar), nz(doc.Systems), nz(doc.Services), problemFeatureID,
+		estimate, doc.ChangeSummary).
 		Scan(&doc.Revision, &doc.UpdatedAt)
 	if err != nil {
 		return err
 	}
-	_, err = d.q.Exec(ctx, `INSERT INTO discovery_revisions (issue_id, revision, content, is_agent, actor_id) VALUES ($1,$2,$3,$4,$5)`,
-		doc.IssueID, doc.Revision, doc.Content, isAgent, actor)
+	ids := doc.RequestIDs
+	if ids == nil {
+		ids = []uuid.UUID{}
+	}
+	_, err = d.q.Exec(ctx, `INSERT INTO discovery_revisions (issue_id, revision, content, is_agent, actor_id, estimate, change_summary, request_ids)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+		doc.IssueID, doc.Revision, doc.Content, isAgent, actor, estimate, doc.ChangeSummary, ids)
 	return err
+}
+
+func decodeEstimate(b []byte) *Estimate {
+	if len(b) == 0 || string(b) == "null" {
+		return nil
+	}
+	var e Estimate
+	if json.Unmarshal(b, &e) != nil {
+		return nil
+	}
+	if e.Basis.Features == nil {
+		e.Basis.Features = []string{}
+	}
+	return &e
 }
 
 // MarkMeasureChecked records a successful dry run of the metric query.
@@ -340,7 +397,10 @@ func (d *DB) MarkMeasureChecked(ctx context.Context, issueID uuid.UUID, at time.
 
 // Revisions lists Discovery revisions, newest first.
 func (d *DB) Revisions(ctx context.Context, issueID uuid.UUID) ([]Revision, error) {
-	rows, err := d.q.Query(ctx, `SELECT r.revision, r.content, r.is_agent, u.display_name, r.created_at FROM discovery_revisions r
+	rows, err := d.q.Query(ctx, `SELECT r.revision, r.content, r.is_agent, u.display_name, r.created_at, r.estimate, r.change_summary,
+		COALESCE((SELECT jsonb_agg(jsonb_build_object('id', q.id, 'author', a.display_name, 'instructions', left(q.instructions, 80)) ORDER BY q.created_at)
+			FROM discovery_requests q LEFT JOIN users a ON a.id = q.author_id WHERE q.id = ANY(r.request_ids)), '[]')
+		FROM discovery_revisions r
 		LEFT JOIN users u ON u.id = r.actor_id WHERE r.issue_id = $1 ORDER BY r.revision DESC LIMIT 100`, issueID)
 	if err != nil {
 		return nil, err
@@ -349,8 +409,14 @@ func (d *DB) Revisions(ctx context.Context, issueID uuid.UUID) ([]Revision, erro
 	out := []Revision{}
 	for rows.Next() {
 		var r Revision
-		if err := rows.Scan(&r.Revision, &r.Content, &r.IsAgent, &r.Actor, &r.CreatedAt); err != nil {
+		var estimate, reqs []byte
+		if err := rows.Scan(&r.Revision, &r.Content, &r.IsAgent, &r.Actor, &r.CreatedAt, &estimate, &r.ChangeSummary, &reqs); err != nil {
 			return nil, err
+		}
+		r.Estimate = decodeEstimate(estimate)
+		_ = json.Unmarshal(reqs, &r.Requests)
+		if r.Requests == nil {
+			r.Requests = []RevReq{}
 		}
 		out = append(out, r)
 	}

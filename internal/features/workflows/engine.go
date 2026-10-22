@@ -475,6 +475,7 @@ func (e *Engine) DispatchOnce(ctx context.Context) (bool, error) {
 				if _, err := tx.Exec(ctx, `UPDATE outbox SET failed_at = now(), last_error = $2 WHERE id = $1`, id, derr.Error()); err != nil {
 					return err
 				}
+				metrics.EffectsFailed.WithLabelValues(effect).Inc()
 				return Send(ctx, tx, runID, "effect_failed", map[string]string{"effect": effect, "error": derr.Error()})
 			}
 			_, err := tx.Exec(ctx, `UPDATE outbox SET last_error = $2, next_attempt_at = now() + $3::interval WHERE id = $1`,

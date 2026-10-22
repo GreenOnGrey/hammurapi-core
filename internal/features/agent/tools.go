@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/GreenOnGrey/hammurapi-core/internal/cycledata"
 	"github.com/GreenOnGrey/hammurapi-core/internal/domain"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/features"
@@ -26,6 +28,12 @@ type DiscoveryInput struct {
 	Systems        []string            `json:"systems"`
 	Services       []string            `json:"services"`
 	ProblemFeature string              `json:"problemFeature"`
+	// Estimate is the draft estimate of the work (FTR.HMR.DISC-0001 R15).
+	Estimate *cycledata.Estimate `json:"estimate"`
+	// ChangeSummary is what changed for the instructions of the run (tech §4.3).
+	ChangeSummary string `json:"changeSummary"`
+	// RequestIDs are the instructions the revision answers (set by the workflow).
+	RequestIDs []uuid.UUID `json:"-"`
 }
 
 // ToolDeps are the dependencies of the MCP tools.
@@ -36,9 +44,13 @@ type ToolDeps struct {
 	Gates         *gates.Service
 	Principal     PrincipalLoader
 	DefaultBranch string
-	// EditDiscovery saves an agent edit of a Discovery document from the chat
-	// and returns the issue to verification (R5).
-	EditDiscovery func(ctx context.Context, p *domain.Principal, issueKey string, in DiscoveryInput) error
+	// RequestRevision gives an instruction of an expert to the researcher
+	// (FTR.HMR.DISC-0001 R7, tech §4.2) and returns the answer for the agent.
+	RequestRevision func(ctx context.Context, p *domain.Principal, g mcp.Grant, issueKey, instructions string) (string, error)
+	// SimilarFeaturesCost answers similar_features_cost (FTR.HMR.DISC-0001 tech §4.4).
+	SimilarFeaturesCost func(ctx context.Context, issueID uuid.UUID, limit int) (string, error)
+	// CheckEstimate validates the estimate of save_discovery (tech §5.1).
+	CheckEstimate func(ctx context.Context, e *cycledata.Estimate) error
 	// TestMetric dry-runs a metric query in a configured source.
 	TestMetric func(ctx context.Context, source, query string) (float64, error)
 	// CreateIssue creates an issue on behalf of the user of a Nabu call
@@ -85,7 +97,28 @@ var discoverySchema = schema(map[string]any{
 	"systems":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "DOMAIN/SYSTEM keys"},
 	"services":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 	"problemFeature": map[string]any{"type": "string", "description": "For a Problem: key of the feature with the error, if it exists in Hammurapi"},
-}, "content", "value", "measure")
+	"estimate":       estimateSchema,
+	"changeSummary": map[string]any{"type": "string", "description": "When the run has instructions of experts: 2–4 Markdown bullets of what changed " +
+		"(up to 1000 characters); the authors get it as the notice of the result."},
+}, "content", "value", "measure", "estimate")
+
+// estimateSchema is the draft estimate of the work (FTR.HMR.DISC-0001 R15).
+var estimateSchema = map[string]any{"type": "object", "description": "The draft estimate: agents do the work with people taking part, never people alone.",
+	"properties": map[string]any{
+		"agent": map[string]any{"type": "array", "description": "Cost of the runs of agents by stage", "items": map[string]any{"type": "object",
+			"properties": map[string]any{"stage": map[string]any{"type": "string", "enum": cycledata.AgentStages},
+				"usd": map[string]any{"type": "number"}, "tokens": map[string]any{"type": "integer"}}, "required": []string{"stage", "usd", "tokens"}}},
+		"people": map[string]any{"type": "array", "description": "Person-hours of people by stage and expertise, in steps of 0.5", "items": map[string]any{"type": "object",
+			"properties": map[string]any{"stage": map[string]any{"type": "string", "enum": cycledata.PeopleStages},
+				"expertise": map[string]any{"type": "string", "enum": cycledata.Expertises}, "personHours": map[string]any{"type": "number"}},
+			"required": []string{"stage", "expertise", "personHours"}}},
+		"days":       map[string]any{"type": "integer", "description": "Calendar days to the release, 1–365"},
+		"waitDays":   map[string]any{"type": "integer", "description": "Of them, days of waiting for people"},
+		"confidence": map[string]any{"type": "string", "enum": cycledata.Confidences},
+		"basis": map[string]any{"type": "object", "properties": map[string]any{
+			"features":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Keys of the similar released features"},
+			"judgement": map[string]any{"type": "boolean"}}},
+	}, "required": []string{"agent", "people", "days", "waitDays", "confidence", "basis"}}
 
 func toolErr(err error) error {
 	if err == nil {
@@ -471,34 +504,82 @@ func Tools(d ToolDeps) []mcp.Tool {
 			},
 		},
 		{
-			Name:        "edit_discovery",
-			Description: "Replace the Discovery document of the current issue. The issue returns to verification.",
-			Modes:       specModes,
-			InputSchema: discoverySchema,
+			Name: "request_discovery_revision",
+			Description: "Give the agent-researcher an instruction to revise the Discovery document of the issue open in the chat of Hammurapi. " +
+				"Write the instruction self-contained: the researcher does not see this conversation. Clear up with the user everything unclear " +
+				"before calling. The result comes to this conversation as a notice when the researcher finishes.",
+			Modes: []string{mcp.ModeNabu},
+			InputSchema: schema(map[string]any{
+				"issueKey":     map[string]any{"type": "string", "description": "Key of the issue, e.g. ISS.FMS-0007"},
+				"instructions": map[string]any{"type": "string", "description": "What to change in the document and why, 1–4000 characters"},
+			}, "issueKey", "instructions"),
 			Handler: func(ctx context.Context, g mcp.Grant, raw json.RawMessage) (string, error) {
-				if !g.CanEditDiscovery() || d.EditDiscovery == nil {
-					return "", &mcp.ToolError{Msg: "Discovery is edited in the chat of an issue, by experts of its domain"}
-				}
-				var in DiscoveryInput
-				if err := json.Unmarshal(raw, &in); err != nil {
-					return "", &mcp.ToolError{Msg: "invalid arguments"}
+				var a struct{ IssueKey, Instructions string }
+				_ = json.Unmarshal(raw, &a)
+				if d.RequestRevision == nil {
+					return "", &mcp.ToolError{Msg: "not available in this context"}
 				}
 				p, err := d.Principal(ctx, g.UserID)
 				if err != nil {
 					return "", err
 				}
-				if err := d.EditDiscovery(ctx, p, g.ContextKey, in); err != nil {
-					return "", toolErr(err)
+				out, err := d.RequestRevision(ctx, p, g, a.IssueKey, a.Instructions)
+				return out, toolErr(err)
+			},
+		},
+		{
+			Name: "similar_features_cost",
+			Description: "Released features of the domain similar to the issue under research, with the cost of their agents by stage (USD, tokens) " +
+				"and the calendar days of their stages. Use them as the basis of the estimate. There is no data on person-hours.",
+			Modes:    []string{mcp.ModeDiscovery},
+			ReadOnly: true,
+			InputSchema: schema(map[string]any{
+				"limit": map[string]any{"type": "integer", "description": "1–10, default 5"},
+			}),
+			Handler: func(ctx context.Context, g mcp.Grant, raw json.RawMessage) (string, error) {
+				var a struct{ Limit int }
+				_ = json.Unmarshal(raw, &a)
+				if d.SimilarFeaturesCost == nil || g.Subject == uuid.Nil {
+					return "", &mcp.ToolError{Msg: "not available in this context"}
 				}
-				return "Discovery updated; the issue is back in verification.", nil
+				return d.SimilarFeaturesCost(ctx, g.Subject, a.Limit)
 			},
 		},
 		{
 			Name:        "save_discovery",
-			Description: "Save the result of the Discovery. Required fields: content, value and measure (source, query, target, window).",
+			Description: "Save the result of the Discovery. Required fields: content, value, measure (source, query, target, window) and estimate; changeSummary when the run has instructions of experts.",
 			Modes:       []string{mcp.ModeDiscovery},
 			InputSchema: discoverySchema,
-			Handler:     sinkHandler("discovery"),
+			Handler: func(ctx context.Context, g mcp.Grant, raw json.RawMessage) (string, error) {
+				var in DiscoveryInput
+				if err := json.Unmarshal(raw, &in); err != nil {
+					return "", &mcp.ToolError{Msg: "invalid arguments: " + err.Error()}
+				}
+				// FTR.HMR.DISC-0001 ES-01, ES-02: the estimate is checked before the result is taken
+				if in.Estimate == nil {
+					return "", &mcp.ToolError{Msg: "estimate: required"}
+				}
+				if d.CheckEstimate != nil {
+					if err := d.CheckEstimate(ctx, in.Estimate); err != nil {
+						var ee *cycledata.EstimateError
+						if errors.As(err, &ee) {
+							return "", &mcp.ToolError{Msg: "estimate." + ee.Field + ": " + ee.Msg}
+						}
+						return "", err
+					}
+				}
+				if len([]rune(in.ChangeSummary)) > 1000 {
+					return "", &mcp.ToolError{Msg: "changeSummary: up to 1000 characters"}
+				}
+				if strings.TrimSpace(in.ChangeSummary) == "" && g.Subject != uuid.Nil {
+					var pending bool
+					_ = d.Store.Q().QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM discovery_requests WHERE issue_id = $1 AND state = 'running')`, g.Subject).Scan(&pending)
+					if pending {
+						return "", &mcp.ToolError{Msg: "changeSummary: required — the run answers instructions of experts"}
+					}
+				}
+				return sinkHandler("discovery")(ctx, g, raw)
+			},
 		},
 		{
 			Name:        "submit_gate",

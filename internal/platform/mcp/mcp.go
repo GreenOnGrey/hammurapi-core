@@ -54,6 +54,11 @@ type Grant struct {
 	Expert bool
 	// Subject is the issue, feature, release or task id of worker and runner contexts.
 	Subject uuid.UUID
+	// Conversation and Channel are the topic of the turn of a personal agent
+	// of Nabu and the channel of the message that began it, from the signed
+	// JWT of Nabu (FTR.HMR.DISC-0001 R6); empty for other callers.
+	Conversation string
+	Channel      string
 	// Sink receives structured results of worker contexts (save_discovery,
 	// submit_gate, report_discrepancy); nil in the chat.
 	Sink func(kind string, payload json.RawMessage) error

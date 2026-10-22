@@ -3,6 +3,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/GreenOnGrey/hammurapi-core/internal/apperr"
 	"github.com/GreenOnGrey/hammurapi-core/internal/config"
+	"github.com/GreenOnGrey/hammurapi-core/internal/cycledata"
 	"github.com/GreenOnGrey/hammurapi-core/internal/domain"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/admin"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/agent"
@@ -42,6 +44,7 @@ import (
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/gates"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/imports"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/issues"
+	"github.com/GreenOnGrey/hammurapi-core/internal/features/issuetopics"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/metricsources"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/nabuconn"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/overview"
@@ -279,7 +282,26 @@ func (c *core) slices() *slices {
 
 func (c *core) toolDeps(s *slices, loadPrincipal agent.PrincipalLoader) agent.ToolDeps {
 	return agent.ToolDeps{Store: c.store, Git: c.provider, Tokens: c.authSvc, Gates: s.gates, Principal: loadPrincipal,
-		DefaultBranch: c.cfg.GitDefaultBranch, EditDiscovery: s.discovery.AgentEdit, TestMetric: s.metrics.Test,
+		DefaultBranch: c.cfg.GitDefaultBranch, TestMetric: s.metrics.Test,
+		// FTR.HMR.DISC-0001: instructions to the researcher, the basis and the check of the estimate
+		RequestRevision: func(ctx context.Context, p *domain.Principal, g mcp.Grant, key, instructions string) (string, error) {
+			r, err := discovery.RequestRevision(ctx, c.pool, discovery.Channel(c.cfg.NabuClientName), p, g, key, instructions)
+			if err != nil {
+				return "", err
+			}
+			// the id comes first: Nabu keeps 140 characters of the result in the step the web reads it from
+			b, _ := json.Marshal(struct {
+				RequestID uuid.UUID `json:"requestId"`
+				State     string    `json:"state"`
+				Position  *int      `json:"position"`
+				IssueKey  string    `json:"issueKey"`
+			}{r.ID, r.State, r.Position, r.IssueKey})
+			return string(b), nil
+		},
+		SimilarFeaturesCost: func(ctx context.Context, issueID uuid.UUID, limit int) (string, error) {
+			return discovery.SimilarFeaturesCostText(ctx, c.pool, issueID, limit)
+		},
+		CheckEstimate: func(ctx context.Context, e *cycledata.Estimate) error { return discovery.CheckEstimate(ctx, c.pool, e) },
 		CreateIssue: func(ctx context.Context, p *domain.Principal, in agent.IssueInput) (string, error) {
 			is, err := s.issues.Create(ctx, p, issues.CreateInput{Type: domain.IssueType(in.Type), Domain: in.Domain, Title: in.Title,
 				Description: in.Description, ViaNabu: true})
@@ -379,7 +401,11 @@ func RunAPI(ctx context.Context, cfg *config.Config) error {
 
 	var nabuChat *nabuconn.Chat
 	nabuMCP := &nabuconn.MCPHandler{Server: mcpServer, EnsureUser: c.authSvc.EnsureDelegated}
+	// FTR.HMR.DISC-0001: the topics of issues in the chat
+	topics := &issuetopics.Service{Pool: c.pool, Email: c.authRepo.UserEmail}
 	if nabuSvc.Enabled() {
+		topics.Nabu = nabuSvc.Client
+		issueSvc.KeyChanged = topics.Rename
 		nabuChat = &nabuconn.Chat{Client: nabuSvc.Client, Hub: hub, Email: c.authRepo.UserEmail}
 		nabuMCP.Verifier = &nabu.Verifier{Issuer: cfg.NabuURL, Audience: "hammurapi", TTL: cfg.NabuJWKSCache}
 		if _, err := nabuSvc.Get(ctx); err != nil {
@@ -410,6 +436,7 @@ func RunAPI(ctx context.Context, cfg *config.Config) error {
 			domainSvc.PublicRoutes(r)
 			overviewSvc.Routes(r)
 			issueSvc.Routes(r)
+			topics.Routes(r)
 			sl.discovery.Routes(r)
 			sl.spec.Routes(r)
 			features.NewHandlers(sl.features).Routes(r)
@@ -587,6 +614,13 @@ func RunWorker(ctx context.Context, cfg *config.Config) error {
 		validation.Machine{}, releases.Machine{}, rollback.Machine{})
 	disc := &discovery.Effects{Q: c.pool, Runner: agents, Timeout: cfg.DiscoveryTimeout}
 	engine.Handle(discovery.Effect, workflows.EffectHandler{Lease: cfg.DiscoveryTimeout + time.Minute, Do: disc.Do})
+	// FTR.HMR.DISC-0001: the next run for waiting instructions and the notices of the result
+	engine.Handle(discovery.EffectDrain, workflows.EffectHandler{Do: (&discovery.DrainEffects{Q: c.pool}).Do})
+	notices := &discovery.NoticeEffects{Q: c.pool, Email: c.authRepo.UserEmail}
+	if ns := c.nabuService(); ns.Enabled() {
+		notices.Nabu = ns.Client
+	}
+	engine.Handle(discovery.EffectNotice, workflows.EffectHandler{Do: notices.Do})
 	gen := &gategen.Effects{Store: c.store, Git: c.provider, Tokens: tokens, Runner: agents, DefaultBranch: cfg.GitDefaultBranch, Timeout: 30 * time.Minute}
 	engine.Handle(gategen.Effect, workflows.EffectHandler{Lease: 31 * time.Minute, Do: gen.Do})
 	check := &validation.Effects{Store: c.store, Git: c.provider, Runner: agents}
