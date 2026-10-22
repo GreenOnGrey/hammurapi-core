@@ -73,7 +73,7 @@ func script(r fakellm.Request) *fakellm.Reply {
 		}
 		content := fmt.Sprintf("## Value\n\n%s makes the product more useful for the users of the domain.\n\n"+
 			"## How we measure\n\n| Source | Query | Target | Window |\n| --- | --- | --- | --- |\n| %s | `sum(hammurapi_demo_value)` | +5%% | 14d |\n\n"+
-			"## Similar issues and features\n\nNone found.\n\n## Affected systems and services\n\nSee the catalog.\n\n## Risks and size\n\nSmall.\n", title, source)
+			"## Similar issues and features\n\nNone found.\n\n## Affected systems and services\n\nSee the catalog.\n\n## Risks\n\nLow.\n", title, source)
 		if kv["type"] == "problem" {
 			content += "\n## Cause hypothesis\n\nA recent change broke the flow.\n"
 		}

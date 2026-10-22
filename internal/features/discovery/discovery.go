@@ -310,7 +310,8 @@ func Prompt(is *cycledata.Issue, prev *cycledata.Discovery, reason map[string]an
 	} else {
 		b.WriteString("No metric sources are configured; still describe the metric and the query.\n")
 	}
-	b.WriteString("\nThe draft estimate (field estimate): the work is done by agents with people taking part; never estimate as if people did it alone. " +
+	b.WriteString("\nThe draft estimate goes only to the field estimate, never into the text of the document: the interface shows it as its own block " +
+		"(FTR.HMR.DISC-0001). The work is done by agents with people taking part; never estimate as if people did it alone. " +
 		"Give the cost of the runs of agents by stage (spec, codegen, checks) in USD and tokens, the person-hours of people by stage (spec, approval, " +
 		"validation, release) and expertise (product, tech), the calendar days to the release with the days of waiting for people, a confidence and a basis. " +
 		"Call similar_features_cost for released similar features and rest the estimate on them; Hammurapi has no data on person-hours, they are your judgement. " +

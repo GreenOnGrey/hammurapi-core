@@ -93,7 +93,7 @@ func schema(props map[string]any, required ...string) map[string]any {
 var areaProp = map[string]any{"type": "string", "enum": []string{"product", "design", "arch", "tech", "qa"}}
 
 var discoverySchema = schema(map[string]any{
-	"content": map[string]any{"type": "string", "description": "Full Discovery markdown: value, how to measure, similar issues and features, affected systems and services, risks, rough size; for a Problem — cause hypothesis and the feature with the error."},
+	"content": map[string]any{"type": "string", "description": "Full Discovery markdown: value, how to measure, similar issues and features, affected systems and services, risks; for a Problem — cause hypothesis and the feature with the error. No estimate of the work: it goes only to the field estimate, the interface shows it as its own block."},
 	"value":   map[string]any{"type": "string", "description": "What value the issue has (one paragraph)."},
 	"measure": map[string]any{"type": "object", "properties": map[string]any{
 		"source": map[string]any{"type": "string", "description": "Name of a configured metric source"},
