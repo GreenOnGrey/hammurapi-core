@@ -530,14 +530,6 @@ func CheckMeasure(ctx context.Context, q postgres.Querier, m *cycledata.Measure)
 	return &MeasureError{"source", "one of the configured metric sources: " + strings.Join(names, ", ")}
 }
 
-func sortStrings(s []string) {
-	for i := 1; i < len(s); i++ {
-		for j := i; j > 0 && s[j] < s[j-1]; j-- {
-			s[j], s[j-1] = s[j-1], s[j]
-		}
-	}
-}
-
 func (s *Service) load(ctx context.Context, key string) (*cycledata.Issue, error) {
 	is, _, err := cycledata.New(s.q).IssueByKey(ctx, key)
 	if errors.Is(err, cycledata.ErrNotFound) {
