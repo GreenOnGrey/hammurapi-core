@@ -49,6 +49,7 @@ type fakeNabu struct {
 	failMsg  int  // the next messages answer 500
 	failGet  bool // reading a conversation answers 500
 	failNote int  // the next notices are stored, then answer 500 (a lost answer)
+	failEdit bool // changing a conversation answers 500
 }
 
 func newFakeNabu(t *testing.T) *fakeNabu {
@@ -102,16 +103,28 @@ func newFakeNabu(t *testing.T) *fakeNabu {
 		write(w, 200, map[string]any{"id": tp.id, "kind": "topic", "title": tp.title, "archivedAt": archived})
 	})
 	mux.HandleFunc("PATCH /client/v1/me/conversations/{id}", func(w http.ResponseWriter, r *http.Request) {
-		var in struct{ Title string }
+		var in struct {
+			Title    *string
+			Archived *bool
+		}
 		_ = json.NewDecoder(r.Body).Decode(&in)
 		f.mu.Lock()
 		defer f.mu.Unlock()
+		if f.failEdit {
+			write(w, 500, map[string]any{})
+			return
+		}
 		tp := topic(r)
 		if tp == nil {
 			notFound(w)
 			return
 		}
-		tp.title = in.Title
+		if in.Title != nil {
+			tp.title = *in.Title
+		}
+		if in.Archived != nil {
+			tp.archived = *in.Archived
+		}
 		write(w, 200, map[string]any{"id": tp.id})
 	})
 	mux.HandleFunc("POST /client/v1/me/conversations/{id}/messages", func(w http.ResponseWriter, r *http.Request) {
@@ -231,6 +244,7 @@ func newDiscRig(t *testing.T) *discRig {
 	store := specdata.NewPG(pool)
 	r.iss = issues.NewService(store, nil, nil, nopEvents{})
 	r.iss.KeyChanged = r.topics.Rename
+	r.iss.Closed = r.topics.Archive
 	r.disc = discovery.NewService(pool, nopEvents{})
 
 	r.engine = workflows.New(pool, nopEvents{}, workflows.Config{MaxAttempts: 2, Lease: time.Minute})
@@ -370,6 +384,72 @@ func TestIssueTopics(t *testing.T) {
 	_, err = r.topics.Topic(ctx, r.anna, newKey)
 	domain.SetAgentDisabled(false)
 	tu.Code(t, err, 409, "agent_disabled")
+}
+
+// TP-19, TP-20: the research ends — the topics of the issue are archived in
+// Nabu and the page shows a draft; a topic Nabu failed to archive keeps its link.
+func TestIssueTopicsArchive(t *testing.T) {
+	ctx := context.Background()
+	r := newDiscRig(t)
+	topicOf := func(p *domain.Principal, key string) string {
+		t.Helper()
+		sent, err := r.topics.Send(ctx, p, key, issuetopics.SendInput{Text: "вопрос"})
+		must(t, err)
+		return sent.ConversationID
+	}
+	archived := func(conv string) bool {
+		r.nabu.mu.Lock()
+		defer r.nabu.mu.Unlock()
+		return r.nabu.topics[conv].archived
+	}
+	newIssue := func(title string) *cycledata.Issue {
+		is, err := r.iss.Create(ctx, r.anna, issues.CreateInput{Type: domain.IssueIdea, Domain: r.domainKey, Title: title, Description: title})
+		must(t, err)
+		return is
+	}
+	linked := func(p *domain.Principal, is *cycledata.Issue) string {
+		conv, err := issuetopics.ConversationOf(ctx, pool, p.UserID, is.ID)
+		must(t, err)
+		return conv
+	}
+	const metric = "hammurapi_issue_topics_archived_total"
+	ok, failed := counter(metric, "result", "archived"), counter(metric, "result", "error")
+	// TP-19: rejected — the topics of both users are archived, the links forgotten
+	rejected := newIssue("Тарифы ночью")
+	a, b := topicOf(r.anna, rejected.Key), topicOf(r.boris, rejected.Key)
+	must(t, r.iss.Reject(ctx, r.anna, rejected.Key, "не нужно"))
+	if !archived(a) || !archived(b) || linked(r.anna, rejected) != "" || linked(r.boris, rejected) != "" {
+		t.Fatal("TP-19: the topics of a rejected issue are not archived")
+	}
+	if v, err := r.topics.Topic(ctx, r.anna, rejected.Key); err != nil || v.ConversationID != nil {
+		t.Fatalf("TP-19: %+v %v", v, err)
+	}
+	// TP-19: merged
+	main, dup := newIssue("Скидка постоянным"), newIssue("Скидка постоянным клиентам")
+	d := topicOf(r.anna, dup.Key)
+	must(t, r.iss.Merge(ctx, r.anna, dup.Key, main.Key))
+	if !archived(d) || linked(r.anna, dup) != "" {
+		t.Fatal("TP-19: the topic of a merged issue is not archived")
+	}
+	if n := counter(metric, "result", "archived") - ok; n != 3 {
+		t.Fatalf("TP-19: archived %v", n)
+	}
+	// TP-20: Nabu fails — the issue is closed, the topic stays active and linked
+	broken := newIssue("Скидка в дождь")
+	f := topicOf(r.anna, broken.Key)
+	r.nabu.mu.Lock()
+	r.nabu.failEdit = true
+	r.nabu.mu.Unlock()
+	must(t, r.iss.Reject(ctx, r.anna, broken.Key, "не нужно"))
+	r.nabu.mu.Lock()
+	r.nabu.failEdit = false
+	r.nabu.mu.Unlock()
+	if archived(f) || linked(r.anna, broken) != f || r.issue(broken.Key).Status != domain.IssueRejected {
+		t.Fatal("TP-20: the link is lost or the issue is open")
+	}
+	if n := counter(metric, "result", "error") - failed; n != 1 {
+		t.Fatalf("TP-20: errors %v", n)
+	}
 }
 
 // topicsOf_unlocked is the id of the first topic of the user; the caller holds the lock.
@@ -743,14 +823,19 @@ func TestDiscoveryEstimate(t *testing.T) {
 
 // effectsFailed reads hammurapi_workflow_effects_failed_total of the effect.
 func effectsFailed(effect string) float64 {
+	return counter("hammurapi_workflow_effects_failed_total", "effect", effect)
+}
+
+// counter reads a counter of the registry by the value of its label.
+func counter(name, label, value string) float64 {
 	mfs, _ := metrics.Registry.Gather()
 	for _, mf := range mfs {
-		if mf.GetName() != "hammurapi_workflow_effects_failed_total" {
+		if mf.GetName() != name {
 			continue
 		}
 		for _, m := range mf.GetMetric() {
 			for _, l := range m.GetLabel() {
-				if l.GetName() == "effect" && l.GetValue() == effect {
+				if l.GetName() == label && l.GetValue() == value {
 					return m.GetCounter().GetValue()
 				}
 			}

@@ -114,6 +114,9 @@ var (
 	IssueTopicsCreated = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "hammurapi_issue_topics_created_total", Help: "Topics of issues created in Nabu by a first message.",
 	})
+	IssueTopicsArchived = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "hammurapi_issue_topics_archived_total", Help: "Topics of issues archived in Nabu when the research ended, by result (archived, error).",
+	}, []string{"result"})
 )
 
 func init() {
@@ -125,6 +128,6 @@ func init() {
 		SpecScanRuns, SpecScanDuration, SpecIndexIssuesOpen, SpecDocuments, SpecIndexedFeatures,
 		WorkflowRuns, WorkflowTransitionDuration, WorkflowBlocked, EffectsFailed, RunnerTasks, RunnerTaskDuration,
 		RunnerTokens, DeployRuns, ReleaseRollbacks,
-		DiscoveryRequests, DiscoveryRequestDuration, NabuNotices, IssueTopicsCreated,
+		DiscoveryRequests, DiscoveryRequestDuration, NabuNotices, IssueTopicsCreated, IssueTopicsArchived,
 	)
 }

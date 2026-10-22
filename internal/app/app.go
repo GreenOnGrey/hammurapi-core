@@ -407,6 +407,7 @@ func RunAPI(ctx context.Context, cfg *config.Config) error {
 	if nabuSvc.Enabled() {
 		topics.Nabu = nabuSvc.Client
 		issueSvc.KeyChanged = topics.Rename
+		issueSvc.Closed = topics.Archive
 		nabuChat = &nabuconn.Chat{Client: nabuSvc.Client, Hub: hub, Email: c.authRepo.UserEmail}
 		nabuMCP.Verifier = &nabu.Verifier{Issuer: cfg.NabuURL, Audience: "hammurapi", TTL: cfg.NabuJWKSCache}
 		if _, err := nabuSvc.Get(ctx); err != nil {

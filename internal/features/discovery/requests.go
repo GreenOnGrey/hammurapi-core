@@ -260,6 +260,12 @@ func RequestRevision(ctx context.Context, pool *pgxpool.Pool, channel string, p 
 	if err != nil {
 		return nil, err
 	}
+	// before the topic: the topics of a closed issue are archived (R25)
+	switch is.Status {
+	case domain.IssueNew, domain.IssueDiscovery, domain.IssueVerification:
+	default:
+		return refuse(fmt.Sprintf("The issue is %s: Discovery is not revised any more", is.Status))
+	}
 	conv, err := issuetopics.ConversationOf(ctx, q, p.UserID, is.ID)
 	if err != nil {
 		return nil, err
@@ -269,11 +275,6 @@ func RequestRevision(ctx context.Context, pool *pgxpool.Pool, channel string, p 
 	}
 	if !p.IsExpertOf(is.Domain) {
 		return refuse("Only experts of domain " + is.Domain + " request revisions of Discovery")
-	}
-	switch is.Status {
-	case domain.IssueNew, domain.IssueDiscovery, domain.IssueVerification:
-	default:
-		return refuse(fmt.Sprintf("The issue is %s: Discovery is not revised any more", is.Status))
 	}
 	instructions = strings.TrimSpace(instructions)
 	if instructions == "" || utf8.RuneCountInString(instructions) > MaxInstructions {

@@ -342,6 +342,11 @@ func (c *Client) RenameTopic(ctx context.Context, email, id, title string) error
 	return c.Do(ctx, http.MethodPatch, "/client/v1/me/conversations/"+url.PathEscape(id), email, map[string]string{"title": title}, nil)
 }
 
+// ArchiveTopic archives a topic of the user (FTR.HMR.DISC-0001 R25).
+func (c *Client) ArchiveTopic(ctx context.Context, email, id string) error {
+	return c.Do(ctx, http.MethodPatch, "/client/v1/me/conversations/"+url.PathEscape(id), email, map[string]bool{"archived": true}, nil)
+}
+
 // PostMessage writes a message of the user to a conversation; out gets the answer of Nabu.
 func (c *Client) PostMessage(ctx context.Context, email, id string, in, out any) error {
 	return c.Do(ctx, http.MethodPost, "/client/v1/me/conversations/"+url.PathEscape(id)+"/messages", email, in, out)

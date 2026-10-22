@@ -40,6 +40,9 @@ type Service struct {
 	// KeyChanged renames the topics of an issue in Nabu after a move
 	// (FTR.HMR.DISC-0001 R3); nil — no topics.
 	KeyChanged func(ctx context.Context, issueID uuid.UUID)
+	// Closed archives the topics of an issue in Nabu when its research ends:
+	// it is accepted, rejected or merged (FTR.HMR.DISC-0001 R25); nil — no topics.
+	Closed func(ctx context.Context, issueID uuid.UUID)
 }
 
 // NewService creates the service.
@@ -352,6 +355,7 @@ func (s *Service) Accept(ctx context.Context, p *domain.Principal, key string, i
 	if err != nil {
 		return "", err
 	}
+	s.closed(ctx, is.ID)
 	s.publish(ctx, is.Key, domain.IssueAccepted)
 	s.events.Publish(ctx, events.Event{Type: events.FeatureUpdated, Data: map[string]any{"uniqueId": featureKey}})
 	return featureKey, nil
@@ -393,6 +397,7 @@ func (s *Service) Reject(ctx context.Context, p *domain.Principal, key, reason s
 	if err != nil {
 		return err
 	}
+	s.closed(ctx, is.ID)
 	s.publish(ctx, is.Key, domain.IssueRejected)
 	return nil
 }
@@ -491,6 +496,7 @@ func (s *Service) Merge(ctx context.Context, p *domain.Principal, key, into stri
 	if err != nil {
 		return err
 	}
+	s.closed(ctx, dup.ID)
 	s.publish(ctx, dup.Key, domain.IssueMerged)
 	return nil
 }
@@ -537,6 +543,14 @@ func (s *Service) Move(ctx context.Context, p *domain.Principal, key, target str
 		s.KeyChanged(ctx, is.ID)
 	}
 	return newKey, nil
+}
+
+// closed archives the topics of an issue whose research ended; before the
+// event, so the page of the issue reads the topic already archived.
+func (s *Service) closed(ctx context.Context, issueID uuid.UUID) {
+	if s.Closed != nil {
+		s.Closed(context.WithoutCancel(ctx), issueID)
+	}
 }
 
 // ─── HTTP ────────────────────────────────────────────────────────────

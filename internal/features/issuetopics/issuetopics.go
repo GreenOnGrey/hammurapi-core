@@ -194,6 +194,31 @@ func (s *Service) ensure(ctx context.Context, userID uuid.UUID, email string, is
 	return conv, err
 }
 
+type link struct {
+	user uuid.UUID
+	conv string
+}
+
+// links lists the topics of an issue.
+func (s *Service) links(ctx context.Context, issueID uuid.UUID) ([]link, error) {
+	rows, err := s.Pool.Query(ctx, `SELECT user_id, conversation_id FROM issue_topics WHERE issue_id = $1`, issueID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var links []link
+	for rows.Next() {
+		var l link
+		var conv uuid.UUID
+		if err := rows.Scan(&l.user, &conv); err != nil {
+			return nil, err
+		}
+		l.conv = conv.String()
+		links = append(links, l)
+	}
+	return links, rows.Err()
+}
+
 // Rename gives every topic of the issue its current key and title after a
 // rename or a move (R3, TP-08, TP-09). It is best effort: a topic that is
 // gone is forgotten, other failures are logged and the next rename fixes them.
@@ -205,25 +230,11 @@ func (s *Service) Rename(ctx context.Context, issueID uuid.UUID) {
 	if err != nil {
 		return
 	}
-	rows, err := s.Pool.Query(ctx, `SELECT user_id, conversation_id FROM issue_topics WHERE issue_id = $1`, issueID)
+	links, err := s.links(ctx, issueID)
 	if err != nil {
 		slog.WarnContext(ctx, "topics of an issue", "issue", is.Key, "err", err)
 		return
 	}
-	type link struct {
-		user uuid.UUID
-		conv string
-	}
-	var links []link
-	for rows.Next() {
-		var l link
-		var conv uuid.UUID
-		if rows.Scan(&l.user, &conv) == nil {
-			l.conv = conv.String()
-			links = append(links, l)
-		}
-	}
-	rows.Close()
 	title := Title(is.Key, is.Title)
 	for _, l := range links {
 		email := s.Email(ctx, l.user)
@@ -239,6 +250,41 @@ func (s *Service) Rename(ctx context.Context, issueID uuid.UUID) {
 		}
 	}
 }
+
+// Archive archives every topic of an issue whose research has ended — it is
+// accepted, rejected or merged (R25, TP-19) — and forgets the links: a new
+// message on the page of the issue starts a new topic. It is best effort: a
+// topic that failed to archive keeps its link and is logged.
+func (s *Service) Archive(ctx context.Context, issueID uuid.UUID) {
+	if s == nil || s.Nabu == nil {
+		return
+	}
+	is, err := cycledata.New(s.Pool).IssueByID(ctx, issueID)
+	if err != nil {
+		return
+	}
+	links, err := s.links(ctx, issueID)
+	if err != nil {
+		slog.WarnContext(ctx, "topics of an issue", "issue", is.Key, "err", err)
+		return
+	}
+	for _, l := range links {
+		err := errNoEmail
+		if email := s.Email(ctx, l.user); email != "" {
+			err = s.Nabu.ArchiveTopic(ctx, email, l.conv)
+		}
+		if err != nil && !nabu.IsNotFound(err) {
+			metrics.IssueTopicsArchived.WithLabelValues("error").Inc()
+			slog.WarnContext(ctx, "archive the topic of an issue", "issue", is.Key, "conversation_id", l.conv, "err", err)
+			continue
+		}
+		metrics.IssueTopicsArchived.WithLabelValues("archived").Inc()
+		Forget(ctx, s.Pool, l.conv)
+	}
+}
+
+// errNoEmail: the owner of a topic lost the email, Nabu is reached by it.
+var errNoEmail = errors.New("the user has no email")
 
 // Routes mounts the endpoints of the topic of an issue.
 func (s *Service) Routes(r chi.Router) {
