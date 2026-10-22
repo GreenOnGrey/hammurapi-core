@@ -9,6 +9,7 @@ import (
 
 	"github.com/GreenOnGrey/hammurapi-core/internal/cycledata"
 	"github.com/GreenOnGrey/hammurapi-core/internal/domain"
+	"github.com/GreenOnGrey/hammurapi-core/internal/features/agent"
 )
 
 // FTR.HMR.DISC-0001 RQ-13, RQ-14, ES-09: the prompt of a revision carries the
@@ -62,5 +63,24 @@ func TestNoticeText(t *testing.T) {
 func TestQueryOf(t *testing.T) {
 	if q := queryOf("Скидка за ранний возврат авто; скидка — 10%!"); q != "скидка | ранний | возврат | авто" {
 		t.Fatalf("%q", q)
+	}
+}
+
+// NT-11: a long summary of the changes is cut at a line, not refused (the agent
+// wrote the whole document again after each refusal).
+func TestClipSummary(t *testing.T) {
+	if s := ClipSummary("  - short\n"); s != "- short" {
+		t.Fatalf("%q", s)
+	}
+	const item = "- пункт изменений, довольно длинный"
+	s := ClipSummary(strings.Repeat(item+"\n", 60))
+	lines := strings.Split(strings.TrimSuffix(s, "…"), "\n")
+	if n := len([]rune(s)); n > agent.MaxChangeSummary || !strings.HasSuffix(s, "…") || lines[len(lines)-1] != item {
+		t.Fatalf("%d %q", n, lines[len(lines)-1])
+	}
+	// no line break in the second half: cut at a word
+	s = ClipSummary(strings.Repeat("слово ", 300))
+	if n := len([]rune(s)); n > agent.MaxChangeSummary || !strings.HasSuffix(s, "слово…") {
+		t.Fatalf("%d %q", n, s)
 	}
 }

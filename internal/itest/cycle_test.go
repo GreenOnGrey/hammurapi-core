@@ -413,3 +413,54 @@ func TestCycle(t *testing.T) {
 		t.Fatalf("releases %d", len(list))
 	}
 }
+
+// WF-07: an effect that runs an agent for minutes holds only its dispatcher:
+// another run gets its effect done and its result processed meanwhile
+// (FTR.HMR.CMN-0002 arch §5.2, FTR.HMR.DISC-0001 tech, решение 27).
+func TestEngineParallelEffects(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	slow, fast := uuid.New(), uuid.New()
+	release := make(chan struct{})
+	e := workflows.New(pool, nopEvents{}, workflows.Config{MaxAttempts: 3, Lease: time.Minute, Dispatchers: 2})
+	e.Register(&countingMachine{})
+	// countingMachine emits "test.flaky"; here it is slow for one run, not flaky
+	e.Handle("test.flaky", workflows.EffectHandler{Do: func(ctx context.Context, run workflows.RunRef, _ json.RawMessage) ([]workflows.NewEvent, error) {
+		if run.SubjectID == slow {
+			select {
+			case <-release:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		return []workflows.NewEvent{{Type: "ok", Payload: map[string]any{}}}, nil
+	}})
+	slowID, err := workflows.Start(ctx, pool, "catalog_sync", slow, nil, "queued", nil)
+	must(t, err)
+	fastID, err := workflows.Start(ctx, pool, "catalog_sync", fast, nil, "queued", nil)
+	must(t, err)
+	done := make(chan error, 1)
+	go func() { done <- e.Run(ctx) }()
+	state := func(id uuid.UUID) string {
+		r, err := workflows.Load(context.Background(), pool, id)
+		must(t, err)
+		return r.State
+	}
+	wait := func(id uuid.UUID, want string) {
+		t.Helper()
+		for deadline := time.Now().Add(15 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+			if state(id) == want {
+				return
+			}
+		}
+		t.Fatalf("run %s is %s, want %s", id, state(id), want)
+	}
+	wait(fastID, "done")
+	if s := state(slowID); s != "working" {
+		t.Fatalf("the slow run is %s while its effect runs", s)
+	}
+	close(release)
+	wait(slowID, "done")
+	cancel()
+	must(t, <-done)
+}

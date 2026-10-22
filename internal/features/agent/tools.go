@@ -96,7 +96,7 @@ func schema(props map[string]any, required ...string) map[string]any {
 var areaProp = map[string]any{"type": "string", "enum": []string{"product", "design", "arch", "tech", "qa"}}
 
 var discoverySchema = schema(map[string]any{
-	"content": map[string]any{"type": "string", "description": "The analysis in Markdown: the problem and its context, affected systems and services, risks, open questions; for a Problem — the hypothesis of the cause. Never repeat the other fields here — value, measure, similar, problemFeature and estimate are shown as blocks of their own."},
+	"content": map[string]any{"type": "string", "description": "The analysis in Markdown: the problem and its context, affected systems and services, risks, open questions as the last section; for a Problem — the hypothesis of the cause. Never repeat the other fields here — value, measure, similar, problemFeature and estimate are shown as blocks of their own."},
 	"value":   map[string]any{"type": "string", "description": "What value the issue has (one paragraph)."},
 	"measure": map[string]any{"type": "object", "description": "Optional: all four fields or none.", "properties": map[string]any{
 		"source": map[string]any{"type": "string", "description": "Exactly the name of one of the configured metric sources, never a description"},
@@ -114,9 +114,13 @@ var discoverySchema = schema(map[string]any{
 	"services":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 	"problemFeature": map[string]any{"type": "string", "description": "For a Problem: key of the feature with the error, if it exists in Hammurapi"},
 	"estimate":       estimateSchema,
-	"changeSummary": map[string]any{"type": "string", "description": "When the run has instructions of experts: 2–4 Markdown bullets of what changed " +
-		"(up to 1000 characters); the authors get it as the notice of the result."},
+	"changeSummary": map[string]any{"type": "string", "description": fmt.Sprintf("When the run has instructions of experts: 2–4 short Markdown bullets of what changed "+
+		"(about %d characters; a longer one is cut); the authors get it as the notice of the result.", MaxChangeSummary)},
 }, "content", "value", "estimate")
+
+// MaxChangeSummary bounds the summary of the changes of a revision; a longer
+// one is cut by discovery.ClipSummary (FTR.HMR.DISC-0001 tech, решение 28).
+const MaxChangeSummary = 1000
 
 // estimateSchema is the draft estimate of the work (FTR.HMR.DISC-0001 R15).
 var estimateSchema = map[string]any{"type": "object", "description": "The draft estimate: agents do the work with people taking part, never people alone.",
@@ -591,9 +595,6 @@ func Tools(d ToolDeps) []mcp.Tool {
 					if err := d.CheckMeasure(ctx, in.Measure); err != nil {
 						return "", toolErr(err)
 					}
-				}
-				if len([]rune(in.ChangeSummary)) > 1000 {
-					return "", &mcp.ToolError{Msg: "changeSummary: up to 1000 characters"}
 				}
 				if strings.TrimSpace(in.ChangeSummary) == "" && g.Subject != uuid.Nil {
 					var pending bool

@@ -212,6 +212,25 @@ func readDoc(key, area, md, section string, limit int) (*ReadResult, error) {
 				return r, nil
 			}
 		}
+		// a section by its number: «3.3», «§7», «7. Аудит» find «3.3 Подтверждение…»,
+		// «7. Аудит и журнал» — agents refer to sections the way specifications do
+		if n := sectionNumber(section); n != "" {
+			var hit *Section
+			for i, sc := range secs {
+				if sectionNumber(sc.Heading.Text) == n {
+					if hit != nil {
+						hit = nil
+						break
+					}
+					hit = &secs[i]
+				}
+			}
+			if hit != nil {
+				r.Section = hit.Heading.Text
+				r.Markdown, r.Truncated = cutParagraph(hit.Text, limit)
+				return r, nil
+			}
+		}
 		var near []string
 		for _, sc := range secs {
 			if strings.Contains(strings.ToLower(sc.Heading.Text), want) || strings.Contains(sc.Heading.Slug, Slug(section)) {
@@ -356,4 +375,16 @@ func (s *Service) References(ctx context.Context, target string, page int) (map[
 		return nil, err
 	}
 	return map[string]any{"target": target, "total": total, "page": page, "items": items, "hasMore": page*size < total}, nil
+}
+
+var sectionNumberRe = regexp.MustCompile(`^\s*(?:§\s*)?(\d+(?:\.\d+)*[a-zа-я]?)(?:[.\s)]|$)`)
+
+// sectionNumber is the number a heading or a reference begins with: «3.3» of
+// «3.3 Подтверждение», «7» of «7. Аудит», «6.1a» of «§6.1a»; "" — none.
+func sectionNumber(s string) string {
+	m := sectionNumberRe.FindStringSubmatch(strings.ToLower(s))
+	if m == nil {
+		return ""
+	}
+	return m[1]
 }

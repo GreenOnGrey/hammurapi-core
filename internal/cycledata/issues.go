@@ -317,6 +317,7 @@ func (d *DB) Discovery(ctx context.Context, issueID uuid.UUID) (*Discovery, erro
 		_ = json.Unmarshal(measure, doc.Measure)
 	}
 	doc.Estimate = decodeEstimate(estimate)
+	doc.Content = OpenQuestionsLast(doc.Content)
 	_ = json.Unmarshal(similar, &doc.Similar)
 	_ = json.Unmarshal(systems, &doc.Systems)
 	_ = json.Unmarshal(services, &doc.Services)
@@ -334,6 +335,7 @@ func (d *DB) Discovery(ctx context.Context, issueID uuid.UUID) (*Discovery, erro
 
 // SaveDiscovery writes a new revision of the Discovery document.
 func (d *DB) SaveDiscovery(ctx context.Context, doc *Discovery, problemFeatureID *uuid.UUID, isAgent bool, actor *uuid.UUID) error {
+	doc.Content = OpenQuestionsLast(doc.Content)
 	measure, _ := json.Marshal(doc.Measure)
 	if doc.Measure == nil {
 		measure = []byte("null")
@@ -414,6 +416,7 @@ func (d *DB) Revisions(ctx context.Context, issueID uuid.UUID) ([]Revision, erro
 			return nil, err
 		}
 		r.Estimate = decodeEstimate(estimate)
+		r.Content = OpenQuestionsLast(r.Content)
 		_ = json.Unmarshal(reqs, &r.Requests)
 		if r.Requests == nil {
 			r.Requests = []RevReq{}

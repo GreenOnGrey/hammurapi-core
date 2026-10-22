@@ -24,6 +24,7 @@ import (
 	"log/slog"
 	"math"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -136,6 +137,7 @@ type Engine struct {
 	events      events.Publisher
 	maxAttempts int
 	lease       time.Duration
+	dispatchers int
 	owner       string
 	Now         func() time.Time
 }
@@ -144,6 +146,10 @@ type Engine struct {
 type Config struct {
 	MaxAttempts int
 	Lease       time.Duration
+	// Dispatchers is how many effects run at once (WORKFLOW_DISPATCHERS). An
+	// effect may hold its dispatcher for minutes (a run of an agent); the runs
+	// of the workflows are processed by their own loop and never wait for it.
+	Dispatchers int
 }
 
 // New creates an engine.
@@ -154,9 +160,12 @@ func New(pool *pgxpool.Pool, ev events.Publisher, cfg Config) *Engine {
 	if cfg.Lease <= 0 {
 		cfg.Lease = 2 * time.Minute
 	}
+	if cfg.Dispatchers <= 0 {
+		cfg.Dispatchers = 4
+	}
 	host, _ := os.Hostname()
 	return &Engine{pool: pool, machines: map[string]Machine{}, effects: map[string]EffectHandler{}, events: ev,
-		maxAttempts: cfg.MaxAttempts, lease: cfg.Lease, owner: fmt.Sprintf("%s:%d", host, os.Getpid()), Now: time.Now}
+		maxAttempts: cfg.MaxAttempts, lease: cfg.Lease, dispatchers: cfg.Dispatchers, owner: fmt.Sprintf("%s:%d", host, os.Getpid()), Now: time.Now}
 }
 
 // Register adds machines.
@@ -252,31 +261,48 @@ func scanRun(row pgx.Row) (*Run, error) {
 // ─── Worker loop ─────────────────────────────────────────────────────
 
 // Run processes due runs and dispatches effects until ctx is done.
+//
+// The runs are processed by one loop and the effects by Dispatchers loops of
+// their own: an effect that runs an agent for minutes holds only its
+// dispatcher, while the results of other effects are processed and other
+// effects start (FTR.HMR.CMN-0002 arch §5.2).
 func (e *Engine) Run(ctx context.Context) error {
-	t := time.NewTicker(500 * time.Millisecond)
-	defer t.Stop()
+	var wg sync.WaitGroup
+	loop := func(once func(context.Context) (bool, error), what string) {
+		defer wg.Done()
+		t := time.NewTicker(500 * time.Millisecond)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				for i := 0; i < 50; i++ { // drain bursts
+					worked, err := once(ctx)
+					if err != nil && ctx.Err() == nil {
+						slog.ErrorContext(ctx, what+" failed", "err", err)
+					}
+					if !worked {
+						break
+					}
+				}
+			}
+		}
+	}
+	wg.Add(1 + e.dispatchers)
+	go loop(e.ProcessOnce, "workflow processing")
+	for range e.dispatchers {
+		go loop(e.DispatchOnce, "outbox dispatch")
+	}
 	gauge := time.NewTicker(30 * time.Second)
 	defer gauge.Stop()
 	for {
 		select {
 		case <-ctx.Done():
+			wg.Wait()
 			return nil
 		case <-gauge.C:
 			e.exportGauge(ctx)
-		case <-t.C:
-			for i := 0; i < 50; i++ { // drain bursts
-				worked, err := e.ProcessOnce(ctx)
-				if err != nil && ctx.Err() == nil {
-					slog.ErrorContext(ctx, "workflow processing failed", "err", err)
-				}
-				sent, derr := e.DispatchOnce(ctx)
-				if derr != nil && ctx.Err() == nil {
-					slog.ErrorContext(ctx, "outbox dispatch failed", "err", derr)
-				}
-				if !worked && !sent {
-					break
-				}
-			}
 		}
 	}
 }

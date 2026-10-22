@@ -610,7 +610,8 @@ func RunWorker(ctx context.Context, cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
-	engine := workflows.New(c.pool, c.events, workflows.Config{MaxAttempts: cfg.WorkflowMaxAttempts, Lease: cfg.WorkflowLease})
+	engine := workflows.New(c.pool, c.events, workflows.Config{MaxAttempts: cfg.WorkflowMaxAttempts, Lease: cfg.WorkflowLease,
+		Dispatchers: cfg.WorkflowDispatchers})
 	engine.Register(discovery.Machine{}, gategen.Machine{}, codegen.Machine{StartValidation: validation.Start},
 		codegen.TaskMachine{Limits: codegen.Limits{MaxParallel: cfg.RunnerMaxParallel, Timeout: cfg.RunnerTimeout}},
 		validation.Machine{}, releases.Machine{}, rollback.Machine{})

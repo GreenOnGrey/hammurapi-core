@@ -67,3 +67,21 @@ func TestCatalogInfoExample(t *testing.T) {
 		t.Error("an existing domain is not repeated")
 	}
 }
+
+// AGT-09: agents refer to a section by its number, as the specifications do:
+// «3.3», «§7», «7. Аудит» find the section; a missing number does not.
+func TestReadSectionByNumber(t *testing.T) {
+	md := "# Спека\n\n## 3. Подтверждение\n\nтекст 3\n\n### 3.3 Подтверждение изменяющих вызовов\n\nтекст 3.3\n\n## 7. Аудит и журнал\n\nтекст 7\n"
+	for query, want := range map[string]string{"3.3": "3.3 Подтверждение изменяющих вызовов", "§7": "7. Аудит и журнал", "7. Аудит": "7. Аудит и журнал", "3": "3. Подтверждение"} {
+		r, err := readDoc("FTR.NAB.CMN-0002", "arch", md, query, 10000)
+		if err != nil || r.Section != want {
+			t.Fatalf("%q: %+v %v", query, r, err)
+		}
+	}
+	if _, err := readDoc("FTR.NAB.CMN-0002", "arch", md, "9", 10000); err == nil {
+		t.Fatal("a missing number is found")
+	}
+	if sectionNumber("Подтверждение") != "" || sectionNumber("6.1a Тема") != "6.1a" {
+		t.Fatal("sectionNumber")
+	}
+}

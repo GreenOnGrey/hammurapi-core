@@ -228,7 +228,7 @@ func Save(ctx context.Context, q postgres.Querier, is *cycledata.Issue, in agent
 	if doc.Measure != nil && *doc.Measure == (cycledata.Measure{}) {
 		doc.Measure = nil
 	}
-	if s := strings.TrimSpace(in.ChangeSummary); s != "" {
+	if s := ClipSummary(in.ChangeSummary); s != "" {
 		doc.ChangeSummary = &s
 	}
 	if err := CheckMeasure(ctx, q, doc.Measure); err != nil {
@@ -257,6 +257,33 @@ func Save(ctx context.Context, q postgres.Querier, is *cycledata.Issue, in agent
 		return 0, err
 	}
 	return doc.Revision, cd.AddActivity(ctx, "issue", is.ID, "discovery_updated", actor, isAgent, map[string]any{"revision": doc.Revision})
+}
+
+// ClipSummary cuts a summary longer than agent.MaxChangeSummary at the last
+// line that fits, or at a word, with an ellipsis: a refusal made the agent
+// write the whole document again (FTR.HMR.DISC-0001 tech, решение 28).
+func ClipSummary(s string) string {
+	s = strings.TrimSpace(s)
+	r := []rune(s)
+	if len(r) <= agent.MaxChangeSummary {
+		return s
+	}
+	cut := r[:agent.MaxChangeSummary-1]
+	if i := lastRune(cut, '\n'); i > len(cut)/2 {
+		cut = cut[:i]
+	} else if i := lastRune(cut, ' '); i > len(cut)/2 {
+		cut = cut[:i]
+	}
+	return strings.TrimRight(string(cut), " \n") + "…"
+}
+
+func lastRune(r []rune, c rune) int {
+	for i := len(r) - 1; i >= 0; i-- {
+		if r[i] == c {
+			return i
+		}
+	}
+	return -1
 }
 
 // CheckEstimate validates an estimate and the features it rests on (ES-02).
@@ -324,7 +351,7 @@ func Prompt(is *cycledata.Issue, prev *cycledata.Discovery, reason map[string]an
 	if is.Type == domain.IssueProblem {
 		b.WriteString(", the hypothesis of the cause")
 	}
-	b.WriteString(" and the open questions.\n")
+	b.WriteString(" and the open questions — always the last section «## Открытые вопросы».\n")
 	if len(sources) > 0 {
 		fmt.Fprintf(&b, "measure.source is exactly the name of one of the configured metric sources: %s — never a description. "+
 			"Check the query with test_metric_query. Without a fitting source leave measure empty and put the idea of the metric into the open questions.\n",

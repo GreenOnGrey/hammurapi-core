@@ -767,3 +767,28 @@ func metricSource(t *testing.T, name, typ string) {
 		ON CONFLICT (name) DO NOTHING`, name, typ)
 	must(t, err)
 }
+
+// OQ-02: a document saved before R24 shows the open questions last, in the
+// document and in its revisions.
+func TestDiscoveryOpenQuestionsLast(t *testing.T) {
+	ctx := context.Background()
+	r := newDiscRig(t)
+	r.research = func(int) ([]workflows.NewEvent, error) { return r.ready("low", nil, ""), nil }
+	is, err := r.iss.Create(ctx, r.anna, issues.CreateInput{Type: domain.IssueIdea, Domain: r.domainKey, Title: "Скидка за возврат", Description: "Скидка за возврат"})
+	must(t, err)
+	r.run()
+	const old = "## Проблема\n\nп\n\n## Открытые вопросы\n\n- в\n\n## Риски\n\nр"
+	_, err = pool.Exec(ctx, `UPDATE discovery_docs SET content = $2 WHERE issue_id = $1`, is.ID, old)
+	must(t, err)
+	_, err = pool.Exec(ctx, `UPDATE discovery_revisions SET content = $2 WHERE issue_id = $1`, is.ID, old)
+	must(t, err)
+	const want = "## Проблема\n\nп\n\n## Риски\n\nр\n\n## Открытые вопросы\n\n- в\n"
+	cd := cycledata.New(pool)
+	doc, err := cd.Discovery(ctx, is.ID)
+	must(t, err)
+	revs, err := cd.Revisions(ctx, is.ID)
+	must(t, err)
+	if doc.Content != want || len(revs) == 0 || revs[0].Content != want {
+		t.Fatalf("%q", doc.Content)
+	}
+}
