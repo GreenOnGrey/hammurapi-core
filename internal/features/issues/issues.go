@@ -268,9 +268,10 @@ func (s *Service) Accept(ctx context.Context, p *domain.Principal, key string, i
 		return "", err
 	}
 	if missing := discovery.Missing(doc); len(missing) > 0 {
-		return "", apperr.Unprocessable("discovery_incomplete", "Discovery has no value or no way to measure it").With("missing", missing)
+		return "", apperr.Unprocessable("discovery_incomplete", "Discovery has no value").With("missing", missing)
 	}
-	if s.metrics != nil {
+	// FTR.HMR.DISC-0001 R23: the way to measure is optional; a given one is checked
+	if s.metrics != nil && doc.Measure != nil {
 		if _, err := s.metrics.Test(ctx, doc.Measure.Source, doc.Measure.Query); err != nil {
 			return "", err
 		}

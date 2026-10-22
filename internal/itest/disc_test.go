@@ -203,6 +203,7 @@ type discRig struct {
 func newDiscRig(t *testing.T) *discRig {
 	ctx := context.Background()
 	r := &discRig{t: t, nabu: newFakeNabu(t), emails: map[uuid.UUID]string{}}
+	metricSource(t, "ch", "clickhouse")
 	suffix := strings.ToUpper(uuid.NewString()[:4])
 	r.domainKey, r.alt = "D"+suffix[:3], "E"+suffix[:3]
 	user := func(name string, expert bool) *domain.Principal {
@@ -690,6 +691,29 @@ func TestDiscoveryEstimate(t *testing.T) {
 		t.Fatalf("ES-02 API: %v", err)
 	}
 
+	// MS-01…MS-03 (R23): the way to measure is optional, whole, and its source is a configured one
+	for _, c := range []struct {
+		m     *cycledata.Measure
+		field string
+	}{
+		{&cycledata.Measure{Source: "Продуктовая БД Nabu (Postgres)", Query: "q", Target: "t", Window: "w"}, "measure.source"},
+		{&cycledata.Measure{Source: "ch", Query: "", Target: "t", Window: "w"}, "measure.query"},
+	} {
+		in := r.ready("medium", nil, "")[0].Payload.(agent.DiscoveryInput)
+		in.Measure = c.m
+		var ae *apperr.Error
+		if err := r.disc.Edit(ctx, r.anna, med.Key, in); !errors.As(err, &ae) || ae.Code != "invalid_measure" || ae.Details["field"] != c.field {
+			t.Fatalf("MS-02, MS-03 %s: %v", c.field, err)
+		}
+	}
+	noMeasure := r.ready("medium", nil, "")[0].Payload.(agent.DiscoveryInput)
+	noMeasure.Measure = nil
+	noMeasure.Estimate.Days = 30 // the estimate of the expert stays for ES-13
+	must(t, r.disc.Edit(ctx, r.anna, med.Key, noMeasure))
+	if v, err := r.disc.Get(ctx, med.Key); err != nil || !v.Complete || len(v.Missing) != 0 || v.Measure != nil {
+		t.Fatalf("MS-01: %+v %v", v, err)
+	}
+
 	// ES-13: the sort by days puts issues without an estimate last both ways; ES-14: an unknown sort
 	_, err = pool.Exec(ctx, `UPDATE discovery_docs SET estimate = NULL WHERE issue_id = $1`, nothing.ID)
 	must(t, err)
@@ -733,4 +757,13 @@ func effectsFailed(effect string) float64 {
 		}
 	}
 	return 0
+}
+
+// metricSource configures a metric source: a way to measure names one of them
+// (FTR.HMR.DISC-0001 R23).
+func metricSource(t *testing.T, name, typ string) {
+	t.Helper()
+	_, err := pool.Exec(context.Background(), `INSERT INTO metric_sources (name, type, endpoint) VALUES ($1, $2, 'http://metrics.invalid')
+		ON CONFLICT (name) DO NOTHING`, name, typ)
+	must(t, err)
 }

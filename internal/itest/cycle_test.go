@@ -171,6 +171,7 @@ func TestCycle(t *testing.T) {
 		must(t, cd.UpsertService(ctx, svc))
 	}
 
+	metricSource(t, "ch", "clickhouse") // FTR.HMR.DISC-0001 R23: the source of a way to measure is configured
 	engine := workflows.New(pool, nopEvents{}, workflows.Config{MaxAttempts: 3, Lease: time.Minute})
 	engine.Register(discovery.Machine{}, validation.Machine{}, releases.Machine{}, rollback.Machine{},
 		codegen.TaskMachine{Limits: codegen.Limits{MaxParallel: 5, Timeout: time.Hour}})

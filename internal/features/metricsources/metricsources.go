@@ -187,6 +187,28 @@ func (s *Service) Test(ctx context.Context, source, query string) (float64, erro
 	return v, nil
 }
 
+// Routes mounts GET /api/v1/metric-sources: the names and types of the
+// sources for every user — the choice of the source of a way to measure
+// (FTR.HMR.DISC-0001 R23); no endpoints and no secrets.
+func (s *Service) Routes(r chi.Router) {
+	r.Get("/metric-sources", httpx.Handler(func(w http.ResponseWriter, r *http.Request) error {
+		srcs, err := cycledata.New(s.q).MetricSources(r.Context())
+		if err != nil {
+			return err
+		}
+		type item struct {
+			Name string `json:"name"`
+			Type string `json:"type"`
+		}
+		out := []item{}
+		for _, m := range srcs {
+			out = append(out, item{m.Name, m.Type})
+		}
+		httpx.JSON(w, 200, map[string]any{"items": out})
+		return nil
+	}))
+}
+
 // AdminRoutes mounts /admin/api/v1/metric-sources.
 func (s *Service) AdminRoutes(r chi.Router) {
 	r.Get("/metric-sources", httpx.Handler(func(w http.ResponseWriter, r *http.Request) error {

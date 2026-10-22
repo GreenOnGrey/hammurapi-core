@@ -302,6 +302,7 @@ func (c *core) toolDeps(s *slices, loadPrincipal agent.PrincipalLoader) agent.To
 			return discovery.SimilarFeaturesCostText(ctx, c.pool, issueID, limit)
 		},
 		CheckEstimate: func(ctx context.Context, e *cycledata.Estimate) error { return discovery.CheckEstimate(ctx, c.pool, e) },
+		CheckMeasure:  func(ctx context.Context, m *cycledata.Measure) error { return discovery.CheckMeasure(ctx, c.pool, m) },
 		CreateIssue: func(ctx context.Context, p *domain.Principal, in agent.IssueInput) (string, error) {
 			is, err := s.issues.Create(ctx, p, issues.CreateInput{Type: domain.IssueType(in.Type), Domain: in.Domain, Title: in.Title,
 				Description: in.Description, ViaNabu: true})
@@ -438,6 +439,7 @@ func RunAPI(ctx context.Context, cfg *config.Config) error {
 			issueSvc.Routes(r)
 			topics.Routes(r)
 			sl.discovery.Routes(r)
+			sl.metrics.Routes(r) // FTR.HMR.DISC-0001 R23: the sources to choose from
 			sl.spec.Routes(r)
 			features.NewHandlers(sl.features).Routes(r)
 			gates.NewHandlers(sl.gates).Routes(r)

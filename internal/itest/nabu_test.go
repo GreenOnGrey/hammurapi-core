@@ -124,6 +124,7 @@ func TestWithoutAgent(t *testing.T) {
 	}
 	// NA-02: the expert fills the document by hand.
 	tu.Code(t, iss.Rediscover(ctx, p, is.Key), 409, "agent_disabled")
+	metricSource(t, "prom", "prometheus")
 	measure := &cycledata.Measure{Source: "prom", Query: "q", Target: ">1", Window: "7d"}
 	must(t, disc.Edit(ctx, p, is.Key, agentInput("## Ценность\n\nA lot", "A lot", measure)))
 	v, err = disc.Get(ctx, is.Key)

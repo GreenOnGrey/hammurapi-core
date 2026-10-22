@@ -79,6 +79,10 @@ type Similar struct {
 	Key   string `json:"key"`
 	Title string `json:"title"`
 	Kind  string `json:"kind"` // issue | feature
+	// Note says how the item relates to the issue; Duplicate marks a possible
+	// duplicate (FTR.HMR.DISC-0001 design §3.6b: the block, not the text, holds it).
+	Note      string `json:"note,omitempty"`
+	Duplicate bool   `json:"duplicate,omitempty"`
 }
 
 // Discovery is the Discovery document of an issue.

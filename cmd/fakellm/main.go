@@ -67,19 +67,18 @@ func script(r fakellm.Request) *fakellm.Reply {
 		if t := issueTitle.FindStringSubmatch(text); t != nil {
 			title = t[2]
 		}
+		// FTR.HMR.DISC-0001 R23: the way to measure is optional and names a configured
+		// source; without FAKELLM_METRIC_SOURCE the fake leaves it empty
 		source := os.Getenv("FAKELLM_METRIC_SOURCE")
-		if source == "" {
-			source = "demo"
-		}
-		content := fmt.Sprintf("## Value\n\n%s makes the product more useful for the users of the domain.\n\n"+
-			"## How we measure\n\n| Source | Query | Target | Window |\n| --- | --- | --- | --- |\n| %s | `sum(hammurapi_demo_value)` | +5%% | 14d |\n\n"+
-			"## Similar issues and features\n\nNone found.\n\n## Affected systems and services\n\nSee the catalog.\n\n## Risks\n\nLow.\n", title, source)
+		// FTR.HMR.DISC-0001: value, measure, similar and estimate are fields of their own, not sections of the text
+		content := fmt.Sprintf("## Problem\n\nThe users of the domain need %s.\n\n"+
+			"## Affected systems and services\n\nSee the catalog.\n\n## Risks\n\nLow.\n", title)
 		if kv["type"] == "problem" {
 			content += "\n## Cause hypothesis\n\nA recent change broke the flow.\n"
 		}
 		args := map[string]any{
 			"content": content, "value": title + " increases the value metric",
-			"measure": map[string]string{"source": source, "query": "sum(hammurapi_demo_value)", "target": "+5%", "window": "14d"},
+
 			// FTR.HMR.DISC-0001 R15: the draft estimate — agents do the work, people take part
 			"estimate": map[string]any{
 				"agent": []map[string]any{{"stage": "spec", "usd": 9, "tokens": 1100000}, {"stage": "codegen", "usd": 26, "tokens": 3400000},
@@ -88,6 +87,9 @@ func script(r fakellm.Request) *fakellm.Reply {
 					{"stage": "approval", "expertise": "product", "personHours": 1}, {"stage": "validation", "expertise": "tech", "personHours": 3},
 					{"stage": "release", "expertise": "product", "personHours": 1}},
 				"days": 9, "waitDays": 4, "confidence": "low", "basis": map[string]any{"features": []string{}, "judgement": true}}}
+		if source != "" {
+			args["measure"] = map[string]string{"source": source, "query": "sum(hammurapi_demo_value)", "target": "+5%", "window": "14d"}
+		}
 		if strings.Contains(text, "New instructions of experts") {
 			args["changeSummary"] = "- Followed the instructions of the experts"
 		}

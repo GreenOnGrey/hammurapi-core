@@ -61,6 +61,9 @@ type ToolDeps struct {
 	SimilarFeaturesCost func(ctx context.Context, issueID uuid.UUID, limit int) (string, error)
 	// CheckEstimate validates the estimate of save_discovery (tech §5.1).
 	CheckEstimate func(ctx context.Context, e *cycledata.Estimate) error
+	// CheckMeasure validates the optional way to measure: all four fields and a
+	// configured metric source (FTR.HMR.DISC-0001 R23).
+	CheckMeasure func(ctx context.Context, m *cycledata.Measure) error
 	// TestMetric dry-runs a metric query in a configured source.
 	TestMetric func(ctx context.Context, source, query string) (float64, error)
 	// CreateIssue creates an issue on behalf of the user of a Nabu call
@@ -93,24 +96,27 @@ func schema(props map[string]any, required ...string) map[string]any {
 var areaProp = map[string]any{"type": "string", "enum": []string{"product", "design", "arch", "tech", "qa"}}
 
 var discoverySchema = schema(map[string]any{
-	"content": map[string]any{"type": "string", "description": "Full Discovery markdown: value, how to measure, similar issues and features, affected systems and services, risks; for a Problem — cause hypothesis and the feature with the error. No estimate of the work: it goes only to the field estimate, the interface shows it as its own block."},
+	"content": map[string]any{"type": "string", "description": "The analysis in Markdown: the problem and its context, affected systems and services, risks, open questions; for a Problem — the hypothesis of the cause. Never repeat the other fields here — value, measure, similar, problemFeature and estimate are shown as blocks of their own."},
 	"value":   map[string]any{"type": "string", "description": "What value the issue has (one paragraph)."},
-	"measure": map[string]any{"type": "object", "properties": map[string]any{
-		"source": map[string]any{"type": "string", "description": "Name of a configured metric source"},
+	"measure": map[string]any{"type": "object", "description": "Optional: all four fields or none.", "properties": map[string]any{
+		"source": map[string]any{"type": "string", "description": "Exactly the name of one of the configured metric sources, never a description"},
 		"query":  map[string]any{"type": "string"},
 		"target": map[string]any{"type": "string"},
 		"window": map[string]any{"type": "string", "description": "Evaluation window, e.g. 14d"},
 	}},
-	"similar": map[string]any{"type": "array", "items": map[string]any{"type": "object", "properties": map[string]any{
-		"key": map[string]any{"type": "string"}, "title": map[string]any{"type": "string"}, "kind": map[string]any{"type": "string", "enum": []string{"issue", "feature"}},
-	}}},
+	"similar": map[string]any{"type": "array", "description": "Related issues and features and possible duplicates — shown as a block of their own, never repeated in content",
+		"items": map[string]any{"type": "object", "properties": map[string]any{
+			"key": map[string]any{"type": "string"}, "title": map[string]any{"type": "string"}, "kind": map[string]any{"type": "string", "enum": []string{"issue", "feature"}},
+			"note":      map[string]any{"type": "string", "description": "One sentence: how it relates to the issue"},
+			"duplicate": map[string]any{"type": "boolean", "description": "true for a possible duplicate of the issue"},
+		}, "required": []string{"key", "title", "kind"}}},
 	"systems":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "DOMAIN/SYSTEM keys"},
 	"services":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 	"problemFeature": map[string]any{"type": "string", "description": "For a Problem: key of the feature with the error, if it exists in Hammurapi"},
 	"estimate":       estimateSchema,
 	"changeSummary": map[string]any{"type": "string", "description": "When the run has instructions of experts: 2–4 Markdown bullets of what changed " +
 		"(up to 1000 characters); the authors get it as the notice of the result."},
-}, "content", "value", "measure", "estimate")
+}, "content", "value", "estimate")
 
 // estimateSchema is the draft estimate of the work (FTR.HMR.DISC-0001 R15).
 var estimateSchema = map[string]any{"type": "object", "description": "The draft estimate: agents do the work with people taking part, never people alone.",
@@ -560,7 +566,7 @@ func Tools(d ToolDeps) []mcp.Tool {
 		},
 		{
 			Name:        "save_discovery",
-			Description: "Save the result of the Discovery. Required fields: content, value, measure (source, query, target, window) and estimate; changeSummary when the run has instructions of experts.",
+			Description: "Save the result of the Discovery. Required fields: content, value and estimate; measure is optional (all of source, query, target, window, the source one of the configured metric sources); changeSummary when the run has instructions of experts.",
 			Modes:       []string{mcp.ModeDiscovery},
 			InputSchema: discoverySchema,
 			Handler: func(ctx context.Context, g mcp.Grant, raw json.RawMessage) (string, error) {
@@ -579,6 +585,11 @@ func Tools(d ToolDeps) []mcp.Tool {
 							return "", &mcp.ToolError{Msg: "estimate." + ee.Field + ": " + ee.Msg}
 						}
 						return "", err
+					}
+				}
+				if d.CheckMeasure != nil {
+					if err := d.CheckMeasure(ctx, in.Measure); err != nil {
+						return "", toolErr(err)
 					}
 				}
 				if len([]rune(in.ChangeSummary)) > 1000 {
