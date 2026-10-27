@@ -124,6 +124,10 @@ func newFakeNabu(t *testing.T) *fakeNabu {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusAccepted)
 			_, _ = io.WriteString(w, `{"messageId":"m1"}`)
+		case r.URL.Path == "/client/v1/me/messages/m1" && r.Method == http.MethodDelete:
+			w.WriteHeader(http.StatusNoContent)
+		case r.URL.Path == "/client/v1/me/messages/a1/stop" && r.Method == http.MethodPost:
+			w.WriteHeader(http.StatusAccepted)
 		case r.URL.Path == "/client/v1/me/agent":
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnprocessableEntity)
@@ -174,6 +178,20 @@ func TestChatProxy(t *testing.T) {
 	}
 	<-f.seen
 	<-f.bodies
+
+	// NB-16: the cancellation of a queued message and the stop of an answer go to Nabu (FTR.NAB.CHAT-0004 R3, R8)
+	for _, c := range []struct {
+		method, path string
+		code         int
+	}{{http.MethodDelete, "/chat/messages/m1", http.StatusNoContent}, {http.MethodPost, "/chat/messages/a1/stop", http.StatusAccepted}} {
+		w = httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(c.method, c.path, nil))
+		if w.Code != c.code {
+			t.Fatalf("%s %s: %d %s", c.method, c.path, w.Code, w.Body)
+		}
+		<-f.seen
+		<-f.bodies
+	}
 
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/chat/conversations", nil))

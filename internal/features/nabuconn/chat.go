@@ -109,6 +109,13 @@ func (c *Chat) Routes(r chi.Router) {
 	r.Post("/chat/messages/{id}/retry", to(func(r *http.Request) string {
 		return "/client/v1/me/messages/" + chi.URLParam(r, "id") + "/retry"
 	}))
+	// FTR.NAB.CHAT-0004: a message waiting in the queue is cancelled, an answer is stopped
+	r.Delete("/chat/messages/{id}", to(func(r *http.Request) string {
+		return "/client/v1/me/messages/" + chi.URLParam(r, "id")
+	}))
+	r.Post("/chat/messages/{id}/stop", to(func(r *http.Request) string {
+		return "/client/v1/me/messages/" + chi.URLParam(r, "id") + "/stop"
+	}))
 	r.Post("/chat/attachments", to(fixed("/client/v1/me/attachments")))
 	r.Get("/chat/attachments/{id}", to(func(r *http.Request) string {
 		return "/client/v1/me/attachments/" + chi.URLParam(r, "id")
