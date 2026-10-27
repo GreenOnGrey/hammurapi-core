@@ -431,7 +431,7 @@ func Tools(d ToolDeps) []mcp.Tool {
 			InputSchema: schema(map[string]any{
 				"type":        map[string]any{"type": "string", "enum": []string{"idea", "problem"}},
 				"domain":      map[string]any{"type": "string", "description": "domain key, e.g. FMS"},
-				"title":       map[string]any{"type": "string", "description": "up to 200 characters"},
+				"title":       map[string]any{"type": "string", "minLength": 1, "maxLength": 200, "description": "up to 200 characters"},
 				"description": map[string]any{"type": "string", "description": "markdown"},
 			}, "type", "domain", "title"),
 			Handler: func(ctx context.Context, g mcp.Grant, raw json.RawMessage) (string, error) {
@@ -534,7 +534,7 @@ func Tools(d ToolDeps) []mcp.Tool {
 			Modes: []string{mcp.ModeNabu},
 			InputSchema: schema(map[string]any{
 				"issueKey":     map[string]any{"type": "string", "description": "Key of the issue, e.g. ISS.FMS-0007"},
-				"instructions": map[string]any{"type": "string", "description": "What to change in the document and why, 1–4000 characters"},
+				"instructions": map[string]any{"type": "string", "minLength": 1, "maxLength": 4000, "description": "What to change in the document and why, 1–4000 characters"},
 			}, "issueKey", "instructions"),
 			Handler: func(ctx context.Context, g mcp.Grant, raw json.RawMessage) (string, error) {
 				var a struct{ IssueKey, Instructions string }

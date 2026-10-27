@@ -177,6 +177,7 @@ type ReadResult struct {
 	FeatureKey      string    `json:"featureKey"`
 	Area            string    `json:"area"`
 	Section         string    `json:"section,omitempty"`
+	Note            string    `json:"note,omitempty"`
 	Markdown        string    `json:"markdown"`
 	TOC             []Heading `json:"toc"`
 	Truncated       bool      `json:"truncated"`
@@ -227,6 +228,11 @@ func readDoc(key, area, md, section string, limit int) (*ReadResult, error) {
 			}
 			if hit != nil {
 				r.Section = hit.Heading.Text
+				// «7. Аудит» against «7. Песочницы»: the number wins, but the agent
+				// is told — it may have mixed up documents or versions
+				if q := sectionTitle(section); q != "" && !strings.Contains(sectionTitle(hit.Heading.Text), q) {
+					r.Note = fmt.Sprintf("found by number %s: %q, not %q", n, hit.Heading.Text, strings.TrimSpace(section))
+				}
 				r.Markdown, r.Truncated = cutParagraph(hit.Text, limit)
 				return r, nil
 			}
@@ -387,4 +393,13 @@ func sectionNumber(s string) string {
 		return ""
 	}
 	return m[1]
+}
+
+// sectionTitle is the text after the number in lower case: «аудит» of «7. Аудит».
+func sectionTitle(s string) string {
+	s = strings.ToLower(s)
+	if loc := sectionNumberRe.FindStringIndex(s); loc != nil {
+		s = s[loc[1]:]
+	}
+	return strings.TrimSpace(strings.TrimLeft(s, ". )"))
 }

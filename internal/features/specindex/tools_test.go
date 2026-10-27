@@ -74,9 +74,14 @@ func TestReadSectionByNumber(t *testing.T) {
 	md := "# Спека\n\n## 3. Подтверждение\n\nтекст 3\n\n### 3.3 Подтверждение изменяющих вызовов\n\nтекст 3.3\n\n## 7. Аудит и журнал\n\nтекст 7\n"
 	for query, want := range map[string]string{"3.3": "3.3 Подтверждение изменяющих вызовов", "§7": "7. Аудит и журнал", "7. Аудит": "7. Аудит и журнал", "3": "3. Подтверждение"} {
 		r, err := readDoc("FTR.NAB.CMN-0002", "arch", md, query, 10000)
-		if err != nil || r.Section != want {
+		if err != nil || r.Section != want || r.Note != "" {
 			t.Fatalf("%q: %+v %v", query, r, err)
 		}
+	}
+	// the number wins over a different title, with a note for the agent
+	r, err := readDoc("FTR.NAB.CMN-0002", "arch", md, "7. Песочницы", 10000)
+	if err != nil || r.Section != "7. Аудит и журнал" || !strings.Contains(r.Note, "found by number 7") {
+		t.Fatalf("mismatch: %+v %v", r, err)
 	}
 	if _, err := readDoc("FTR.NAB.CMN-0002", "arch", md, "9", 10000); err == nil {
 		t.Fatal("a missing number is found")
