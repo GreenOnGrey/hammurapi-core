@@ -32,8 +32,20 @@ type DiscoveryInput struct {
 	Estimate *cycledata.Estimate `json:"estimate"`
 	// ChangeSummary is what changed for the instructions of the run (tech §4.3).
 	ChangeSummary string `json:"changeSummary"`
+	// Questions are the open questions of the round (FTR.HMR.DISC-0001 R26).
+	Questions []cycledata.QuestionInput `json:"questions"`
 	// RequestIDs are the instructions the revision answers (set by the workflow).
 	RequestIDs []uuid.UUID `json:"-"`
+}
+
+// RevisionBrief is the brief of the personal agent to the researcher
+// (FTR.HMR.DISC-0001 R28, tech §4.2): answers to the open questions, the
+// context of the user that concerns the issue and what else to change.
+// The title of an answered question is set by the server.
+type RevisionBrief struct {
+	Answers      []cycledata.Answer `json:"answers"`
+	Context      string             `json:"context"`
+	Instructions string             `json:"instructions"`
 }
 
 // DiscoveryRule tells the personal agent of a user that it does not write the
@@ -54,9 +66,9 @@ type ToolDeps struct {
 	Gates         *gates.Service
 	Principal     PrincipalLoader
 	DefaultBranch string
-	// RequestRevision gives an instruction of an expert to the researcher
-	// (FTR.HMR.DISC-0001 R7, tech §4.2) and returns the answer for the agent.
-	RequestRevision func(ctx context.Context, p *domain.Principal, g mcp.Grant, issueKey, instructions string) (string, error)
+	// RequestRevision gives the brief of an expert to the researcher
+	// (FTR.HMR.DISC-0001 R7, R28, tech §4.2) and returns the answer for the agent.
+	RequestRevision func(ctx context.Context, p *domain.Principal, g mcp.Grant, issueKey string, b RevisionBrief) (string, error)
 	// SimilarFeaturesCost answers similar_features_cost (FTR.HMR.DISC-0001 tech §4.4).
 	SimilarFeaturesCost func(ctx context.Context, issueID uuid.UUID, limit int) (string, error)
 	// CheckEstimate validates the estimate of save_discovery (tech §5.1).
@@ -96,7 +108,7 @@ func schema(props map[string]any, required ...string) map[string]any {
 var areaProp = map[string]any{"type": "string", "enum": []string{"product", "design", "arch", "tech", "qa"}}
 
 var discoverySchema = schema(map[string]any{
-	"content": map[string]any{"type": "string", "description": "The analysis in Markdown: the problem and its context, affected systems and services, risks, open questions as the last section; for a Problem — the hypothesis of the cause. Never repeat the other fields here — value, measure, similar, problemFeature and estimate are shown as blocks of their own."},
+	"content": map[string]any{"type": "string", "description": "The analysis in Markdown: the problem and its context, affected systems and services, risks; for a Problem — the hypothesis of the cause. Never repeat the other fields here — value, measure, similar, problemFeature, estimate and questions are shown as blocks of their own; no section of open questions."},
 	"value":   map[string]any{"type": "string", "description": "What value the issue has (one paragraph)."},
 	"measure": map[string]any{"type": "object", "description": "Optional: all four fields or none.", "properties": map[string]any{
 		"source": map[string]any{"type": "string", "description": "Exactly the name of one of the configured metric sources, never a description"},
@@ -114,6 +126,16 @@ var discoverySchema = schema(map[string]any{
 	"services":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 	"problemFeature": map[string]any{"type": "string", "description": "For a Problem: key of the feature with the error, if it exists in Hammurapi"},
 	"estimate":       estimateSchema,
+	"questions": map[string]any{"type": "array", "description": "The open questions to the experts: one round, at most 5, most important first; " +
+		"only decisions of the experts, never facts you can find. Shown as a block of their own; an empty array — no questions left.",
+		"items": map[string]any{"type": "object", "properties": map[string]any{
+			"id":          map[string]any{"type": "string", "description": "Only for a question asked again: its number, e.g. Q3; a new question has none"},
+			"title":       map[string]any{"type": "string", "description": "A few words"},
+			"body":        map[string]any{"type": "string", "description": "The question with what the experts need to decide it"},
+			"options":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Up to 4 short options"},
+			"recommended": map[string]any{"type": "string", "description": "Your recommended answer, worded so that «yes» accepts it"},
+			"why":         map[string]any{"type": "string", "description": "Why you recommend it, one or two sentences"},
+		}, "required": []string{"title", "body", "recommended"}}},
 	"changeSummary": map[string]any{"type": "string", "description": fmt.Sprintf("When the run has instructions of experts: 2–4 short Markdown bullets of what changed "+
 		"(about %d characters; a longer one is cut); the authors get it as the notice of the result.", MaxChangeSummary)},
 }, "content", "value", "estimate")
@@ -188,8 +210,10 @@ func Tools(d ToolDeps) []mcp.Tool {
 			},
 		},
 		{
-			Name:        "read_issue",
-			Description: "Read an issue with its description and the current Discovery document.",
+			Name: "read_issue",
+			Description: "Read an issue with its description and the current Discovery document. " +
+				"Without the tool save_discovery you are not the agent-researcher: never write or rewrite the Discovery document yourself, " +
+				"not in the chat and not in a file, even when the user asks to rewrite or regenerate it; call request_discovery_revision instead.",
 			Modes:       research,
 			ReadOnly:    true,
 			InputSchema: schema(map[string]any{"key": map[string]any{"type": "string"}}, "key"),
@@ -217,6 +241,9 @@ func Tools(d ToolDeps) []mcp.Tool {
 					if doc.Measure != nil {
 						fmt.Fprintf(&b, "measure: source=%s query=%q target=%s window=%s\n", doc.Measure.Source, doc.Measure.Query, doc.Measure.Target, doc.Measure.Window)
 					}
+				}
+				if doc != nil {
+					writeQuestions(&b, doc.Questions)
 				}
 				if g.Mode == mcp.ModeNabu {
 					b.WriteString(DiscoveryRule)
@@ -527,17 +554,26 @@ func Tools(d ToolDeps) []mcp.Tool {
 			},
 		},
 		{
-			Name: "request_discovery_revision",
-			Description: "Give the agent-researcher an instruction to revise the Discovery document of the issue open in the chat of Hammurapi. " +
-				"Write the instruction self-contained: the researcher does not see this conversation. Clear up with the user everything unclear " +
-				"before calling. The result comes to this conversation as a notice when the researcher finishes.",
-			Modes: []string{mcp.ModeNabu},
+			Name:        "request_discovery_revision",
+			Description: RevisionToolDescription,
+			Modes:       []string{mcp.ModeNabu},
 			InputSchema: schema(map[string]any{
-				"issueKey":     map[string]any{"type": "string", "description": "Key of the issue, e.g. ISS.FMS-0007"},
-				"instructions": map[string]any{"type": "string", "minLength": 1, "maxLength": 4000, "description": "What to change in the document and why, 1–4000 characters"},
-			}, "issueKey", "instructions"),
+				"issueKey": map[string]any{"type": "string", "description": "Key of the issue, e.g. ISS.FMS-0007"},
+				"answers": map[string]any{"type": "array", "maxItems": 10, "description": "Answers to the open questions of the document, confirmed by the user",
+					"items": map[string]any{"type": "object", "properties": map[string]any{
+						"questionId": map[string]any{"type": "string", "description": "Number of an open question, e.g. Q3"},
+						"answer":     map[string]any{"type": "string", "minLength": 1, "maxLength": 1000},
+						"source": map[string]any{"type": "string", "enum": []cycledata.AnswerSource{cycledata.AnswerUser, cycledata.AnswerMemory},
+							"description": "user — the user answered; memory — you proposed it from what you know of the user and the user confirmed it"},
+					}, "required": []string{"questionId", "answer", "source"}}},
+				"context":      map[string]any{"type": "string", "maxLength": 4000, "description": "What you know of the user and the team that concerns this issue, up to 4000 characters"},
+				"instructions": map[string]any{"type": "string", "maxLength": 4000, "description": "What else to change in the document and why, up to 4000 characters"},
+			}, "issueKey"),
 			Handler: func(ctx context.Context, g mcp.Grant, raw json.RawMessage) (string, error) {
-				var a struct{ IssueKey, Instructions string }
+				var a struct {
+					IssueKey string `json:"issueKey"`
+					RevisionBrief
+				}
 				_ = json.Unmarshal(raw, &a)
 				if d.RequestRevision == nil {
 					return "", &mcp.ToolError{Msg: "not available in this context"}
@@ -546,7 +582,7 @@ func Tools(d ToolDeps) []mcp.Tool {
 				if err != nil {
 					return "", err
 				}
-				out, err := d.RequestRevision(ctx, p, g, a.IssueKey, a.Instructions)
+				out, err := d.RequestRevision(ctx, p, g, a.IssueKey, a.RevisionBrief)
 				return out, toolErr(err)
 			},
 		},
@@ -570,7 +606,7 @@ func Tools(d ToolDeps) []mcp.Tool {
 		},
 		{
 			Name:        "save_discovery",
-			Description: "Save the result of the Discovery. Required fields: content, value and estimate; measure is optional (all of source, query, target, window, the source one of the configured metric sources); changeSummary when the run has instructions of experts.",
+			Description: "Save the result of the Discovery. Required fields: content, value and estimate; measure is optional (all of source, query, target, window, the source one of the configured metric sources); changeSummary when the run has instructions of experts; questions — the open round to the experts.",
 			Modes:       []string{mcp.ModeDiscovery},
 			InputSchema: discoverySchema,
 			Handler: func(ctx context.Context, g mcp.Grant, raw json.RawMessage) (string, error) {
@@ -676,4 +712,41 @@ func CheckEdit(ctx context.Context, store specdata.Store, g mcp.Grant, area doma
 		return &mcp.ToolError{Msg: "the gate is approved; the agent does not edit approved gates"}
 	}
 	return nil
+}
+
+// RevisionToolDescription is how the personal agent prepares a brief
+// (FTR.HMR.DISC-0001 R28, R29): it names no skills, they only refine how
+// the agent asks.
+const RevisionToolDescription = "Give the agent-researcher a brief to revise the Discovery document of the issue open in the chat of Hammurapi. " +
+	"This is the only way to change, rewrite or regenerate the document: never write it yourself. Before calling: " +
+	"1) read the open questions of the document (read_issue); " +
+	"2) answer those you can from what you know about the user — memory, earlier conversations, their decisions on similar issues — and confirm each such answer with the user; " +
+	"3) ask the user the rest, a few at a time, each with your recommendation; " +
+	"4) show the whole brief and call after the user agrees. " +
+	"Put into context only what concerns this issue: every reader of the issue sees the brief. " +
+	"The researcher does not see this conversation, so the brief must be self-contained. " +
+	"Skills or instructions you have may refine how you ask; the brief is still sent by this tool. " +
+	"The result comes to this conversation as a notice when the researcher finishes."
+
+// writeQuestions adds the open questions of a document to the answer of
+// read_issue (FTR.HMR.DISC-0001 tech §4.6).
+func writeQuestions(b *strings.Builder, qs []cycledata.Question) {
+	if len(qs) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "\n--- Open questions (round %d) ---\n", cycledata.LastRound(qs))
+	for _, q := range qs {
+		fmt.Fprintf(b, "%s — %s\n", q.ID, q.Title)
+		if q.Body != "" {
+			fmt.Fprintf(b, "%s\n", q.Body)
+		}
+		if len(q.Options) > 0 {
+			fmt.Fprintf(b, "options: %s\n", strings.Join(q.Options, " | "))
+		}
+		fmt.Fprintf(b, "recommended: %s", q.Recommended)
+		if q.Why != "" {
+			fmt.Fprintf(b, " — %s", q.Why)
+		}
+		b.WriteString("\n")
+	}
 }

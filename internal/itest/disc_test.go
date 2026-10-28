@@ -3,10 +3,12 @@
 package itest
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -484,7 +486,7 @@ func TestDiscoveryRevisions(t *testing.T) {
 	carlConv := topicOf(r.carl)
 	ch := discovery.Channel("hammurapi")
 	ask := func(p *domain.Principal, g mcp.Grant, text string) (*discovery.Request, error) {
-		return discovery.RequestRevision(ctx, pool, ch, p, g, is.Key, text)
+		return discovery.RequestRevision(ctx, pool, ch, p, g, is.Key, agent.RevisionBrief{Instructions: text})
 	}
 	// RQ-03, RQ-05: another channel or none
 	for _, c := range []string{"telegram", ""} {
@@ -493,7 +495,7 @@ func TestDiscoveryRevisions(t *testing.T) {
 		}
 	}
 	// RQ-03a: the channel is the one of the service client of this installation (NABU_CLIENT_NAME)
-	if _, err := discovery.RequestRevision(ctx, pool, discovery.Channel("hammurapi-stage"), r.anna, r.grant(r.anna, annaConv, ch), is.Key, "x"); !strings.Contains(toolMsg(err), "from the chat of the issue in Hammurapi") {
+	if _, err := discovery.RequestRevision(ctx, pool, discovery.Channel("hammurapi-stage"), r.anna, r.grant(r.anna, annaConv, ch), is.Key, agent.RevisionBrief{Instructions: "x"}); !strings.Contains(toolMsg(err), "from the chat of the issue in Hammurapi") {
 		t.Fatalf("RQ-03a: %v", err)
 	}
 	// RQ-04: another topic
@@ -504,9 +506,10 @@ func TestDiscoveryRevisions(t *testing.T) {
 	if _, err := ask(r.carl, r.grant(r.carl, carlConv, ch), "x"); !strings.Contains(toolMsg(err), "Only experts of domain") {
 		t.Fatalf("RQ-07: %v", err)
 	}
-	// RQ-09: the length of the instruction
-	for _, text := range []string{" ", strings.Repeat("я", discovery.MaxInstructions+1)} {
-		if _, err := ask(r.anna, r.grant(r.anna, annaConv, ch), text); !strings.Contains(toolMsg(err), "instructions: 1–4000") {
+	// RQ-09: neither answers nor instructions; the length of the instruction
+	for text, want := range map[string]string{" ": "answers or instructions are required",
+		strings.Repeat("я", discovery.MaxInstructions+1): "instructions: up to 4000"} {
+		if _, err := ask(r.anna, r.grant(r.anna, annaConv, ch), text); !strings.Contains(toolMsg(err), want) {
 			t.Fatalf("RQ-09: %v", err)
 		}
 	}
@@ -552,6 +555,9 @@ func TestDiscoveryRevisions(t *testing.T) {
 	}
 	if out, _ := readIssue.Handler(ctx, mcp.Grant{Mode: mcp.ModeDiscovery, Subject: is.ID}, arg); strings.Contains(out, agent.DiscoveryRule) {
 		t.Fatal("RQ-02a: the researcher gets the rule of the personal agent")
+	}
+	if !strings.Contains(readIssue.Description, "request_discovery_revision") || !strings.Contains(readIssue.Description, "save_discovery") {
+		t.Fatalf("RQ-02a: the description of read_issue has no rule: %s", readIssue.Description)
 	}
 
 	// RQ-11, NT-02, NT-03: instructions during a run wait and go together
@@ -877,3 +883,200 @@ func TestDiscoveryOpenQuestionsLast(t *testing.T) {
 		t.Fatalf("%q", doc.Content)
 	}
 }
+
+// ─── FTR.HMR.DISC-0001: questions to the experts ─────────────────────
+
+// QS-02, QS-06…QS-09, QS-15, QS-17: the server numbers the rounds, an
+// expert answers on the page of the issue without a topic, the personal
+// agent sends a brief, a manual edit keeps the questions.
+func TestDiscoveryQuestions(t *testing.T) {
+	ctx := context.Background()
+	r := newDiscRig(t)
+	round := func(qs ...cycledata.QuestionInput) {
+		r.research = func(int) ([]workflows.NewEvent, error) {
+			ev := r.ready("low", nil, "- Ответы учтены")
+			in := ev[0].Payload.(agent.DiscoveryInput)
+			in.Questions = qs
+			ev[0].Payload = in
+			return ev, nil
+		}
+	}
+	q := func(id, title string, options ...string) cycledata.QuestionInput {
+		return cycledata.QuestionInput{ID: id, QuestionText: cycledata.QuestionText{Title: title, Body: "?", Options: options, Recommended: "рек " + title, Why: "потому что"}}
+	}
+	round(q("", "Порог"), q("", "Источник", "VictoriaMetrics", "ClickHouse"), q("", "Промокоды"))
+	is, err := r.iss.Create(ctx, r.anna, issues.CreateInput{Type: domain.IssueIdea, Domain: r.domainKey, Title: "Скидка за ранний возврат"})
+	must(t, err)
+	r.run()
+	v, err := r.disc.Get(ctx, is.Key)
+	must(t, err)
+	if len(v.Questions) != 3 || v.Questions[0].ID != "Q1" || v.Questions[2].ID != "Q3" || v.QuestionRound != 1 {
+		t.Fatalf("QS-02 first round: %+v", v.Questions)
+	}
+	// QS-17: the personal agent sees the open questions
+	var readIssue mcp.Tool
+	for _, tl := range agent.Tools(agent.ToolDeps{Store: specdata.NewPG(pool)}) {
+		if tl.Name == "read_issue" {
+			readIssue = tl
+		}
+	}
+	arg, _ := json.Marshal(map[string]string{"key": is.Key})
+	out, err := readIssue.Handler(ctx, mcp.Grant{UserID: r.anna.UserID, Mode: mcp.ModeNabu}, arg)
+	must(t, err)
+	if !strings.Contains(out, "--- Open questions (round 1) ---\nQ1 — Порог") || !strings.Contains(out, "options: VictoriaMetrics | ClickHouse") {
+		t.Fatalf("QS-17: %s", out)
+	}
+
+	answer := func(p *domain.Principal, in discovery.AnswersInput) (*discovery.Request, error) {
+		return discovery.AnswerQuestions(ctx, pool, p, is.Key, in)
+	}
+	code := func(err error) string {
+		if e, ok := apperr.As(err); ok {
+			return e.Code + " " + fmt.Sprint(e.Details["field"])
+		}
+		return fmt.Sprint(err)
+	}
+	one := func(a discovery.AnswerInput) discovery.AnswersInput {
+		return discovery.AnswersInput{Answers: []discovery.AnswerInput{a}}
+	}
+	opt := func(i int) *int { return &i }
+	// QS-07: an unknown question, a repeat, a missing option, an empty own answer
+	for in, want := range map[*discovery.AnswersInput]string{
+		ptr(one(discovery.AnswerInput{QuestionID: "Q9", Choice: discovery.ChoiceRecommended})):                                                               "unknown_question answers[0].questionId",
+		ptr(one(discovery.AnswerInput{QuestionID: "Q2", Choice: discovery.ChoiceOption, Option: opt(5)})):                                                    "invalid_answer answers[0].option",
+		ptr(one(discovery.AnswerInput{QuestionID: "Q1", Choice: discovery.ChoiceOwn, Text: " "})):                                                            "invalid_answer answers[0].text",
+		{Answers: []discovery.AnswerInput{{QuestionID: "Q1", Choice: discovery.ChoiceRecommended}, {QuestionID: "q1", Choice: discovery.ChoiceRecommended}}}: "invalid_answer answers[1].questionId",
+		{}: "invalid_answer answers",
+	} {
+		if _, err := answer(r.anna, *in); code(err) != want {
+			t.Fatalf("QS-07 %s: %v", want, err)
+		}
+	}
+	// QS-08: not an expert
+	if _, err := answer(r.carl, one(discovery.AnswerInput{QuestionID: "Q1", Choice: discovery.ChoiceRecommended})); !strings.HasPrefix(code(err), "forbidden") {
+		t.Fatalf("QS-08: %v", err)
+	}
+	// QS-06, QS-09: Boris has no topic of the issue; the choice becomes the text of the answer
+	gone := counter("hammurapi_nabu_notice_total", "result", "gone")
+	req, err := answer(r.boris, discovery.AnswersInput{Answers: []discovery.AnswerInput{
+		{QuestionID: "Q1", Choice: discovery.ChoiceRecommended},
+		{QuestionID: "Q2", Choice: discovery.ChoiceOption, Option: opt(1)},
+		{QuestionID: "Q3", Choice: discovery.ChoiceOwn, Text: "Не суммируются"}}})
+	must(t, err)
+	got, err := discovery.GetRequest(ctx, pool, req.ID)
+	must(t, err)
+	if got.ConversationID != nil || len(got.Answers) != 3 || got.Answers[0].Answer != "рек Порог" || got.Answers[1].Answer != "ClickHouse" ||
+		got.Answers[2].Answer != "Не суммируются" || got.Answers[1].Question != "Источник" || got.Answers[0].Source != cycledata.AnswerExpert {
+		t.Fatalf("QS-06: %+v", got)
+	}
+	round(q("Q2", "Источник", "VictoriaMetrics", "ClickHouse"), q("", "Подсказка"), q("", "Срок"))
+	r.run()
+	if got, _ = discovery.GetRequest(ctx, pool, req.ID); got.State != discovery.RequestDone {
+		t.Fatalf("QS-06 state: %s", got.State)
+	}
+	if n := counter("hammurapi_nabu_notice_total", "result", "gone") - gone; n != 1 {
+		t.Fatalf("QS-09: notices gone %v", n)
+	}
+	v, err = r.disc.Get(ctx, is.Key)
+	must(t, err)
+	ids := []string{}
+	for _, qu := range v.Questions {
+		ids = append(ids, fmt.Sprintf("%s/%d", qu.ID, qu.Round))
+	}
+	if strings.Join(ids, " ") != "Q2/1 Q4/2 Q5/2" || v.QuestionRound != 2 {
+		t.Fatalf("QS-02 second round: %v", ids)
+	}
+	revs, err := cycledata.New(pool).Revisions(ctx, is.ID)
+	must(t, err)
+	if len(revs[0].Requests) != 1 || strings.Join(revs[0].Requests[0].Questions, ",") != "Q1,Q2,Q3" {
+		t.Fatalf("history of answers: %+v", revs[0].Requests)
+	}
+
+	// QS-15, QS-16: a brief of the personal agent of Anna
+	conv, err := r.topics.Send(ctx, r.anna, is.Key, issuetopics.SendInput{Text: "ответь на вопросы"})
+	must(t, err)
+	ch := discovery.Channel("hammurapi")
+	brief := func(b agent.RevisionBrief) (*discovery.Request, error) {
+		return discovery.RequestRevision(ctx, pool, ch, r.anna, r.grant(r.anna, conv.ConversationID, ch), is.Key, b)
+	}
+	if _, err := brief(agent.RevisionBrief{Answers: []cycledata.Answer{{QuestionID: "Q1", Answer: "x", Source: "user"}}}); !strings.Contains(toolMsg(err), "unknown question Q1: open questions are Q2, Q4, Q5") {
+		t.Fatalf("QS-16: %v", err)
+	}
+	if _, err := brief(agent.RevisionBrief{Context: strings.Repeat("я", discovery.MaxInstructions+1), Instructions: "x"}); !strings.Contains(toolMsg(err), "context: up to 4000") {
+		t.Fatalf("QS-16 context: %v", err)
+	}
+	req, err = brief(agent.RevisionBrief{Context: "Команда FMS считает метрики в VictoriaMetrics",
+		Answers: []cycledata.Answer{{QuestionID: "q2", Answer: "VictoriaMetrics", Source: cycledata.AnswerMemory}}})
+	must(t, err)
+	if got, _ = discovery.GetRequest(ctx, pool, req.ID); got.Context == nil || len(got.Answers) != 1 || got.Answers[0].QuestionID != "Q2" ||
+		got.Answers[0].Source != cycledata.AnswerMemory || got.Instructions != "" {
+		t.Fatalf("QS-15: %+v", got)
+	}
+	round(q("", "Ещё"))
+	r.run()
+
+	// a manual edit keeps the questions (tech §5.6)
+	before, err := r.disc.Get(ctx, is.Key)
+	must(t, err)
+	must(t, r.disc.Edit(ctx, r.anna, is.Key, agent.DiscoveryInput{Content: "# правка", Value: "Больше заказов"}))
+	after, err := r.disc.Get(ctx, is.Key)
+	must(t, err)
+	if len(after.Questions) != len(before.Questions) || after.Questions[0].ID != before.Questions[0].ID {
+		t.Fatalf("manual edit: %+v → %+v", before.Questions, after.Questions)
+	}
+	// QS-08: a closed issue
+	must(t, r.iss.Reject(ctx, r.anna, is.Key, "не нужно"))
+	if _, err := answer(r.anna, one(discovery.AnswerInput{QuestionID: after.Questions[0].ID, Choice: discovery.ChoiceRecommended})); !strings.HasPrefix(code(err), "issue_closed") {
+		t.Fatalf("QS-08 closed: %v", err)
+	}
+}
+
+// QS-01: questions over the limit of a round are dropped with a warning
+// and the metric; the result is saved.
+func TestDiscoveryQuestionsDropped(t *testing.T) {
+	ctx := context.Background()
+	r := newDiscRig(t)
+	var qs []cycledata.QuestionInput
+	for i := range 7 {
+		qs = append(qs, cycledata.QuestionInput{QuestionText: cycledata.QuestionText{Title: fmt.Sprintf("q%d", i), Body: "?", Recommended: "да"}})
+	}
+	r.research = func(int) ([]workflows.NewEvent, error) {
+		ev := r.ready("low", nil, "")
+		in := ev[0].Payload.(agent.DiscoveryInput)
+		in.Questions = qs
+		ev[0].Payload = in
+		return ev, nil
+	}
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(prev)
+	before := plainCounter("hammurapi_discovery_questions_dropped_total")
+	is, err := r.iss.Create(ctx, r.anna, issues.CreateInput{Type: domain.IssueIdea, Domain: r.domainKey, Title: "Много вопросов"})
+	must(t, err)
+	r.run()
+	v, err := r.disc.Get(ctx, is.Key)
+	must(t, err)
+	if len(v.Questions) != cycledata.MaxQuestions || v.Questions[4].ID != "Q5" {
+		t.Fatalf("QS-01: %+v", v.Questions)
+	}
+	if n := plainCounter("hammurapi_discovery_questions_dropped_total") - before; n != 2 {
+		t.Fatalf("QS-01: dropped %v", n)
+	}
+	if !strings.Contains(logs.String(), "level=WARN msg=\"questions of the researcher dropped\"") || !strings.Contains(logs.String(), "dropped=2") {
+		t.Fatalf("QS-01: no warning in %q", logs.String())
+	}
+}
+
+// plainCounter reads a counter of the registry without labels.
+func plainCounter(name string) float64 {
+	mfs, _ := metrics.Registry.Gather()
+	for _, mf := range mfs {
+		if mf.GetName() == name && len(mf.GetMetric()) > 0 {
+			return mf.GetMetric()[0].GetCounter().GetValue()
+		}
+	}
+	return 0
+}
+
+func ptr[T any](v T) *T { return &v }

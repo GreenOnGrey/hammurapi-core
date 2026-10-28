@@ -100,9 +100,13 @@ type Discovery struct {
 	Estimate *Estimate `json:"estimate"`
 	// ChangeSummary is what the researcher changed for the instructions of
 	// the revision (FTR.HMR.DISC-0001 tech §4.3).
-	ChangeSummary *string   `json:"changeSummary"`
-	Revision      int       `json:"revision"`
-	UpdatedAt     time.Time `json:"updatedAt"`
+	ChangeSummary *string `json:"changeSummary"`
+	// Questions are the open questions to the experts (FTR.HMR.DISC-0001
+	// R26) with the last number and round given out (tech §5.6).
+	Questions []Question       `json:"questions"`
+	Counters  QuestionCounters `json:"-"`
+	Revision  int              `json:"revision"`
+	UpdatedAt time.Time        `json:"updatedAt"`
 	// RequestIDs are the instructions the revision answers (written only).
 	RequestIDs []uuid.UUID `json:"-"`
 }
@@ -125,6 +129,8 @@ type RevReq struct {
 	ID           uuid.UUID `json:"id"`
 	Author       *string   `json:"author"`
 	Instructions string    `json:"instructions"`
+	// Questions are the numbers of the questions the instruction answers.
+	Questions []string `json:"questions"`
 }
 
 // Service is a product service (Backstage Component).

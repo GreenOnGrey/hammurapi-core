@@ -62,11 +62,23 @@ func notices(ctx context.Context, tx pgx.Tx, runID uuid.UUID, is *cycledata.Issu
 			by[r.AuthorID] = a
 			order = append(order, a)
 		}
-		a.conv = r.ConversationID.String() // the latest topic of the author
+		if r.ConversationID != nil {
+			a.conv = r.ConversationID.String() // the latest topic of the author
+		}
 		a.ids = append(a.ids, r.ID.String())
 	}
 	var out []workflows.Effect
 	for _, a := range order {
+		if a.conv == "" { // answers given on the page of the issue (tech §5.3): the topic of the author, if any
+			conv, err := issuetopics.ConversationOf(ctx, tx, a.id, is.ID)
+			if err != nil {
+				return nil, err
+			}
+			if a.conv = conv; conv == "" {
+				metrics.NabuNotices.WithLabelValues("gone").Inc()
+				continue
+			}
+		}
 		co := []string{}
 		for _, o := range order {
 			if o.id != a.id {

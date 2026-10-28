@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/GreenOnGrey/hammurapi-core/internal/apperr"
 	"github.com/GreenOnGrey/hammurapi-core/internal/cycledata"
 	"github.com/GreenOnGrey/hammurapi-core/internal/domain"
+	"github.com/GreenOnGrey/hammurapi-core/internal/features/agent"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/issuetopics"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/workflows"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/events"
@@ -35,8 +37,14 @@ const (
 	RequestFailed  = "failed"
 )
 
-// MaxInstructions bounds the text of an instruction.
+// MaxInstructions bounds the text of an instruction and the context of a brief.
 const MaxInstructions = 4000
+
+// Bounds of the answers of an instruction (tech §3.5, §4.2).
+const (
+	MaxAnswer       = 1000
+	MaxBriefAnswers = 10
+)
 
 // Channel is the channel of Nabu of the messages written in Hammurapi: Nabu
 // names it after the service client (NABU_CLIENT_NAME).
@@ -47,24 +55,30 @@ const EventRequestUpdated = "discovery.request.updated"
 
 // Request is an instruction of an expert to the researcher.
 type Request struct {
-	ID             uuid.UUID  `json:"id"`
-	IssueID        uuid.UUID  `json:"-"`
-	IssueKey       string     `json:"issueKey"`
-	AuthorID       uuid.UUID  `json:"-"`
-	Author         *string    `json:"author"`
-	ConversationID uuid.UUID  `json:"-"`
+	ID       uuid.UUID `json:"id"`
+	IssueID  uuid.UUID `json:"-"`
+	IssueKey string    `json:"issueKey"`
+	AuthorID uuid.UUID `json:"-"`
+	Author   *string   `json:"author"`
+	// ConversationID is the topic of the author; nil for answers given on
+	// the page of the issue (tech §3.5).
+	ConversationID *uuid.UUID `json:"-"`
 	Instructions   string     `json:"instructions"`
-	State          string     `json:"state"`
-	Position       *int       `json:"position"`
-	RunID          *uuid.UUID `json:"-"`
-	Revision       *int       `json:"revision"`
-	Error          *string    `json:"error"`
-	CreatedAt      time.Time  `json:"createdAt"`
-	FinishedAt     *time.Time `json:"finishedAt"`
+	// Answers and Context come with a brief or the answers of an expert
+	// (FTR.HMR.DISC-0001 R27, R28).
+	Answers    []cycledata.Answer `json:"answers"`
+	Context    *string            `json:"context"`
+	State      string             `json:"state"`
+	Position   *int               `json:"position"`
+	RunID      *uuid.UUID         `json:"-"`
+	Revision   *int               `json:"revision"`
+	Error      *string            `json:"error"`
+	CreatedAt  time.Time          `json:"createdAt"`
+	FinishedAt *time.Time         `json:"finishedAt"`
 }
 
-const reqCols = `q.id, q.issue_id, i.key, q.author_id, u.display_name, q.conversation_id, q.instructions, q.state, q.run_id, q.revision,
-	q.error, q.created_at, q.finished_at`
+const reqCols = `q.id, q.issue_id, i.key, q.author_id, u.display_name, q.conversation_id, q.instructions, q.answers, q.context, q.state, q.run_id,
+	q.revision, q.error, q.created_at, q.finished_at`
 
 const reqFrom = ` FROM discovery_requests q JOIN issues i ON i.id = q.issue_id LEFT JOIN users u ON u.id = q.author_id`
 
@@ -77,9 +91,14 @@ func listRequests(ctx context.Context, q postgres.Querier, sql string, args ...a
 	var out []Request
 	for rows.Next() {
 		var r Request
-		if err := rows.Scan(&r.ID, &r.IssueID, &r.IssueKey, &r.AuthorID, &r.Author, &r.ConversationID, &r.Instructions, &r.State, &r.RunID,
-			&r.Revision, &r.Error, &r.CreatedAt, &r.FinishedAt); err != nil {
+		var answers []byte
+		if err := rows.Scan(&r.ID, &r.IssueID, &r.IssueKey, &r.AuthorID, &r.Author, &r.ConversationID, &r.Instructions, &answers, &r.Context,
+			&r.State, &r.RunID, &r.Revision, &r.Error, &r.CreatedAt, &r.FinishedAt); err != nil {
 			return nil, err
+		}
+		_ = json.Unmarshal(answers, &r.Answers)
+		if r.Answers == nil {
+			r.Answers = []cycledata.Answer{}
 		}
 		out = append(out, r)
 	}
@@ -243,11 +262,11 @@ func Restart(ctx context.Context, q postgres.Querier, issueID uuid.UUID) error {
 	return Start(ctx, q, issueID, nil)
 }
 
-// RequestRevision is the MCP tool request_discovery_revision (R6–R8, tech
-// §4.2): the topic and the channel come from the signed JWT of Nabu, never
-// from the arguments.
+// RequestRevision is the MCP tool request_discovery_revision (R6–R8, R28,
+// tech §4.2): the topic and the channel come from the signed JWT of Nabu,
+// never from the arguments.
 // channel is the channel of Hammurapi in Nabu (Channel of NABU_CLIENT_NAME).
-func RequestRevision(ctx context.Context, pool *pgxpool.Pool, channel string, p *domain.Principal, g mcp.Grant, issueKey, instructions string) (*Request, error) {
+func RequestRevision(ctx context.Context, pool *pgxpool.Pool, channel string, p *domain.Principal, g mcp.Grant, issueKey string, b agent.RevisionBrief) (*Request, error) {
 	var q postgres.Querier = pool
 	refuse := func(msg string) (*Request, error) { return nil, &mcp.ToolError{Msg: msg} }
 	if g.Channel == "" || g.Channel != channel {
@@ -276,19 +295,167 @@ func RequestRevision(ctx context.Context, pool *pgxpool.Pool, channel string, p 
 	if !p.IsExpertOf(is.Domain) {
 		return refuse("Only experts of domain " + is.Domain + " request revisions of Discovery")
 	}
-	instructions = strings.TrimSpace(instructions)
-	if instructions == "" || utf8.RuneCountInString(instructions) > MaxInstructions {
-		return refuse(fmt.Sprintf("instructions: 1–%d characters", MaxInstructions))
+	instructions, briefContext := strings.TrimSpace(b.Instructions), strings.TrimSpace(b.Context)
+	switch {
+	case len(b.Answers) == 0 && instructions == "":
+		return refuse("answers or instructions are required")
+	case utf8.RuneCountInString(instructions) > MaxInstructions:
+		return refuse(fmt.Sprintf("instructions: up to %d characters", MaxInstructions))
+	case utf8.RuneCountInString(briefContext) > MaxInstructions:
+		return refuse(fmt.Sprintf("context: up to %d characters", MaxInstructions))
+	case len(b.Answers) > MaxBriefAnswers:
+		return refuse(fmt.Sprintf("answers: up to %d", MaxBriefAnswers))
+	}
+	open, err := openQuestions(ctx, q, is.ID)
+	if err != nil {
+		return nil, err
+	}
+	answers := make([]cycledata.Answer, 0, len(b.Answers))
+	for _, a := range b.Answers {
+		text, problem := answerText(a.Answer)
+		if problem != "" {
+			return refuse("answer: " + problem)
+		}
+		if !a.Source.OfBrief() {
+			return refuse("source: user or memory")
+		}
+		question, ok := findQuestion(open, a.QuestionID)
+		if !ok {
+			return refuse(unknownQuestion(a.QuestionID, open))
+		}
+		answers = append(answers, cycledata.Answer{QuestionID: question.ID, Question: question.Title, Answer: text, Source: a.Source})
 	}
 	convID, _ := uuid.Parse(conv)
+	nr := newRequest{IssueID: is.ID, AuthorID: p.UserID, Conversation: &convID, Instructions: instructions, Answers: answers}
+	if briefContext != "" {
+		nr.Context = &briefContext
+	}
+	return enqueue(ctx, pool, nr)
+}
+
+// answerText trims an answer and tells what is wrong with it, "" — nothing.
+func answerText(s string) (string, string) {
+	s = strings.TrimSpace(s)
+	switch {
+	case s == "":
+		return s, "required"
+	case utf8.RuneCountInString(s) > MaxAnswer:
+		return s, fmt.Sprintf("up to %d characters", MaxAnswer)
+	}
+	return s, ""
+}
+
+// AnswersInput is the body of POST /issues/{key}/discovery/answers (tech §3.5).
+type AnswersInput struct {
+	Answers []AnswerInput `json:"answers"`
+	Comment string        `json:"comment"`
+}
+
+// AnswerInput is the choice of an expert for an open question.
+type AnswerInput struct {
+	QuestionID string       `json:"questionId"`
+	Choice     AnswerChoice `json:"choice"`
+	Option     *int         `json:"option"`
+	Text       string       `json:"text"`
+}
+
+// AnswerChoice is how an expert answers on the page of the issue.
+type AnswerChoice string
+
+// Answer choices of the page of the issue.
+const (
+	ChoiceRecommended AnswerChoice = "recommended"
+	ChoiceOption      AnswerChoice = "option"
+	ChoiceOwn         AnswerChoice = "own"
+)
+
+// AnswerQuestions gives the answers of an expert on the page of the issue
+// to the researcher without the personal agent (R27): the choice becomes
+// the text of the answer; the result goes to the topic of the expert if
+// there is one.
+func AnswerQuestions(ctx context.Context, pool *pgxpool.Pool, p *domain.Principal, issueKey string, in AnswersInput) (*Request, error) {
+	if domain.AgentDisabled() {
+		return nil, apperr.AgentDisabled()
+	}
+	var q postgres.Querier = pool
+	is, err := revisable(ctx, q, p, issueKey)
+	if err != nil {
+		return nil, err
+	}
+	invalid := func(i int, field, msg string) error {
+		return apperr.Unprocessable("invalid_answer", msg).With("field", fmt.Sprintf("answers[%d].%s", i, field))
+	}
+	if len(in.Answers) == 0 {
+		return nil, apperr.Unprocessable("invalid_answer", "at least one answer is required").With("field", "answers")
+	}
+	comment := strings.TrimSpace(in.Comment)
+	if utf8.RuneCountInString(comment) > MaxInstructions {
+		return nil, apperr.Unprocessable("invalid_answer", fmt.Sprintf("comment: up to %d characters", MaxInstructions)).With("field", "comment")
+	}
+	open, err := openQuestions(ctx, q, is.ID)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	answers := make([]cycledata.Answer, 0, len(in.Answers))
+	for i, a := range in.Answers {
+		question, ok := findQuestion(open, a.QuestionID)
+		if !ok {
+			return nil, apperr.Unprocessable("unknown_question", unknownQuestion(a.QuestionID, open)).With("field", fmt.Sprintf("answers[%d].questionId", i))
+		}
+		if seen[question.ID] {
+			return nil, invalid(i, "questionId", "a question is answered once")
+		}
+		seen[question.ID] = true
+		var text string
+		switch a.Choice {
+		case ChoiceRecommended:
+			text = question.Recommended
+		case ChoiceOption:
+			if a.Option == nil || *a.Option < 0 || *a.Option >= len(question.Options) {
+				return nil, invalid(i, "option", "no such option")
+			}
+			text = question.Options[*a.Option]
+		case ChoiceOwn:
+			var problem string
+			if text, problem = answerText(a.Text); problem != "" {
+				return nil, invalid(i, "text", problem)
+			}
+		default:
+			return nil, invalid(i, "choice", "recommended, option or own")
+		}
+		answers = append(answers, cycledata.Answer{QuestionID: question.ID, Question: question.Title, Answer: text, Source: cycledata.AnswerExpert})
+	}
+	nr := newRequest{IssueID: is.ID, AuthorID: p.UserID, Instructions: comment, Answers: answers}
+	if c, err := issuetopics.ConversationOf(ctx, q, p.UserID, is.ID); err != nil {
+		return nil, err
+	} else if id, err := uuid.Parse(c); err == nil {
+		nr.Conversation = &id
+	}
+	return enqueue(ctx, pool, nr)
+}
+
+// newRequest is an instruction to write: Conversation is the topic of the
+// author (nil — answers of the page), Context the context of a brief.
+type newRequest struct {
+	IssueID, AuthorID uuid.UUID
+	Conversation      *uuid.UUID
+	Instructions      string
+	Context           *string
+	Answers           []cycledata.Answer
+}
+
+// enqueue writes an instruction and starts a run when none is active.
+func enqueue(ctx context.Context, pool *pgxpool.Pool, nr newRequest) (*Request, error) {
+	data, _ := json.Marshal(nr.Answers)
 	var r *Request
-	err = postgres.InTx(ctx, pool, func(tx pgx.Tx) error {
+	err := postgres.InTx(ctx, pool, func(tx pgx.Tx) error {
 		var id uuid.UUID
-		if err := tx.QueryRow(ctx, `INSERT INTO discovery_requests (issue_id, author_id, conversation_id, instructions) VALUES ($1,$2,$3,$4) RETURNING id`,
-			is.ID, p.UserID, convID, instructions).Scan(&id); err != nil {
+		if err := tx.QueryRow(ctx, `INSERT INTO discovery_requests (issue_id, author_id, conversation_id, instructions, answers, context)
+			VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`, nr.IssueID, nr.AuthorID, nr.Conversation, nr.Instructions, data, nr.Context).Scan(&id); err != nil {
 			return err
 		}
-		started, err := startRun(ctx, tx, is.ID)
+		started, err := startRun(ctx, tx, nr.IssueID)
 		if err != nil {
 			return err
 		}
@@ -305,6 +472,36 @@ func RequestRevision(ctx context.Context, pool *pgxpool.Pool, channel string, p 
 	}
 	metrics.DiscoveryRequests.WithLabelValues(RequestQueued).Inc()
 	return r, nil
+}
+
+// openQuestions are the open questions of the current document.
+func openQuestions(ctx context.Context, q postgres.Querier, issueID uuid.UUID) ([]cycledata.Question, error) {
+	doc, err := cycledata.New(q).Discovery(ctx, issueID)
+	if err != nil || doc == nil {
+		return nil, err
+	}
+	return doc.Questions, nil
+}
+
+func findQuestion(open []cycledata.Question, id string) (cycledata.Question, bool) {
+	id = cycledata.QuestionID(id)
+	for _, question := range open {
+		if question.ID == id {
+			return question, true
+		}
+	}
+	return cycledata.Question{}, false
+}
+
+func unknownQuestion(id string, open []cycledata.Question) string {
+	if len(open) == 0 {
+		return "unknown question " + id + ": the document has no open questions"
+	}
+	ids := make([]string, len(open))
+	for i, question := range open {
+		ids[i] = question.ID
+	}
+	return "unknown question " + id + ": open questions are " + strings.Join(ids, ", ")
 }
 
 // requestEvents tell the web the new states of the instructions.

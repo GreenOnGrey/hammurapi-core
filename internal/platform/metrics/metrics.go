@@ -117,6 +117,9 @@ var (
 	IssueTopicsArchived = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "hammurapi_issue_topics_archived_total", Help: "Topics of issues archived in Nabu when the research ended, by result (archived, error).",
 	}, []string{"result"})
+	DiscoveryQuestionsDropped = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "hammurapi_discovery_questions_dropped_total", Help: "Questions of the researcher dropped: over the limit of a round or without a title or a recommendation.",
+	})
 )
 
 func init() {
@@ -128,6 +131,6 @@ func init() {
 		SpecScanRuns, SpecScanDuration, SpecIndexIssuesOpen, SpecDocuments, SpecIndexedFeatures,
 		WorkflowRuns, WorkflowTransitionDuration, WorkflowBlocked, EffectsFailed, RunnerTasks, RunnerTaskDuration,
 		RunnerTokens, DeployRuns, ReleaseRollbacks,
-		DiscoveryRequests, DiscoveryRequestDuration, NabuNotices, IssueTopicsCreated, IssueTopicsArchived,
+		DiscoveryRequests, DiscoveryRequestDuration, NabuNotices, IssueTopicsCreated, IssueTopicsArchived, DiscoveryQuestionsDropped,
 	)
 }

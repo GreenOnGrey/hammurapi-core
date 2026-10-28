@@ -300,12 +300,12 @@ var ErrInvalidSort = errors.New("invalid sort")
 // Discovery loads the Discovery document (nil if not written yet).
 func (d *DB) Discovery(ctx context.Context, issueID uuid.UUID) (*Discovery, error) {
 	var doc Discovery
-	var measure, similar, systems, services, estimate []byte
+	var measure, similar, systems, services, estimate, questions []byte
 	err := d.q.QueryRow(ctx, `SELECT dd.issue_id, dd.content, dd.value_text, dd.measure, dd.measure_checked_at, dd.similar_items, dd.systems,
-		dd.services, f.unique_id, dd.revision, dd.updated_at, dd.estimate, dd.change_summary
+		dd.services, f.unique_id, dd.revision, dd.updated_at, dd.estimate, dd.change_summary, dd.questions, dd.question_seq, dd.question_round
 		FROM discovery_docs dd LEFT JOIN features f ON f.id = dd.problem_feature_id WHERE dd.issue_id = $1`, issueID).
 		Scan(&doc.IssueID, &doc.Content, &doc.Value, &measure, &doc.MeasureCheckedAt, &similar, &systems, &services,
-			&doc.ProblemFeature, &doc.Revision, &doc.UpdatedAt, &estimate, &doc.ChangeSummary)
+			&doc.ProblemFeature, &doc.Revision, &doc.UpdatedAt, &estimate, &doc.ChangeSummary, &questions, &doc.Counters.Seq, &doc.Counters.Round)
 	if postgres.IsNoRows(err) {
 		return nil, nil
 	}
@@ -321,6 +321,10 @@ func (d *DB) Discovery(ctx context.Context, issueID uuid.UUID) (*Discovery, erro
 	_ = json.Unmarshal(similar, &doc.Similar)
 	_ = json.Unmarshal(systems, &doc.Systems)
 	_ = json.Unmarshal(services, &doc.Services)
+	_ = json.Unmarshal(questions, &doc.Questions)
+	if doc.Questions == nil {
+		doc.Questions = []Question{}
+	}
 	if doc.Similar == nil {
 		doc.Similar = []Similar{}
 	}
@@ -352,17 +356,18 @@ func (d *DB) SaveDiscovery(ctx context.Context, doc *Discovery, problemFeatureID
 		estimate, _ = json.Marshal(doc.Estimate)
 	}
 	err := d.q.QueryRow(ctx, `INSERT INTO discovery_docs (issue_id, content, value_text, measure, similar_items, systems, services, problem_feature_id,
-			estimate, change_summary, revision, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,1,now())
+			estimate, change_summary, questions, question_seq, question_round, revision, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,1,now())
 		ON CONFLICT (issue_id) DO UPDATE SET content = EXCLUDED.content, value_text = EXCLUDED.value_text, measure = EXCLUDED.measure,
 			similar_items = EXCLUDED.similar_items, systems = EXCLUDED.systems, services = EXCLUDED.services,
 			problem_feature_id = EXCLUDED.problem_feature_id, measure_checked_at = CASE WHEN discovery_docs.measure = EXCLUDED.measure
 				THEN discovery_docs.measure_checked_at END,
-			estimate = EXCLUDED.estimate, change_summary = EXCLUDED.change_summary,
+			estimate = EXCLUDED.estimate, change_summary = EXCLUDED.change_summary, questions = EXCLUDED.questions,
+			question_seq = EXCLUDED.question_seq, question_round = EXCLUDED.question_round,
 			revision = discovery_docs.revision + 1, updated_at = now()
 		RETURNING revision, updated_at`,
 		doc.IssueID, doc.Content, doc.Value, measure, nz(doc.Similar), nz(doc.Systems), nz(doc.Services), problemFeatureID,
-		estimate, doc.ChangeSummary).
+		estimate, doc.ChangeSummary, nz(doc.Questions), doc.Counters.Seq, doc.Counters.Round).
 		Scan(&doc.Revision, &doc.UpdatedAt)
 	if err != nil {
 		return err
@@ -371,9 +376,10 @@ func (d *DB) SaveDiscovery(ctx context.Context, doc *Discovery, problemFeatureID
 	if ids == nil {
 		ids = []uuid.UUID{}
 	}
-	_, err = d.q.Exec(ctx, `INSERT INTO discovery_revisions (issue_id, revision, content, is_agent, actor_id, estimate, change_summary, request_ids)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-		doc.IssueID, doc.Revision, doc.Content, isAgent, actor, estimate, doc.ChangeSummary, ids)
+	_, err = d.q.Exec(ctx, `INSERT INTO discovery_revisions (issue_id, revision, content, is_agent, actor_id, estimate, change_summary, request_ids,
+			questions, question_seq, question_round)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+		doc.IssueID, doc.Revision, doc.Content, isAgent, actor, estimate, doc.ChangeSummary, ids, nz(doc.Questions), doc.Counters.Seq, doc.Counters.Round)
 	return err
 }
 
@@ -400,7 +406,8 @@ func (d *DB) MarkMeasureChecked(ctx context.Context, issueID uuid.UUID, at time.
 // Revisions lists Discovery revisions, newest first.
 func (d *DB) Revisions(ctx context.Context, issueID uuid.UUID) ([]Revision, error) {
 	rows, err := d.q.Query(ctx, `SELECT r.revision, r.content, r.is_agent, u.display_name, r.created_at, r.estimate, r.change_summary,
-		COALESCE((SELECT jsonb_agg(jsonb_build_object('id', q.id, 'author', a.display_name, 'instructions', left(q.instructions, 80)) ORDER BY q.created_at)
+		COALESCE((SELECT jsonb_agg(jsonb_build_object('id', q.id, 'author', a.display_name, 'instructions', left(q.instructions, 80),
+				'questions', (SELECT COALESCE(jsonb_agg(x->>'questionId'), '[]') FROM jsonb_array_elements(q.answers) x)) ORDER BY q.created_at)
 			FROM discovery_requests q LEFT JOIN users a ON a.id = q.author_id WHERE q.id = ANY(r.request_ids)), '[]')
 		FROM discovery_revisions r
 		LEFT JOIN users u ON u.id = r.actor_id WHERE r.issue_id = $1 ORDER BY r.revision DESC LIMIT 100`, issueID)

@@ -284,8 +284,8 @@ func (c *core) toolDeps(s *slices, loadPrincipal agent.PrincipalLoader) agent.To
 	return agent.ToolDeps{Store: c.store, Git: c.provider, Tokens: c.authSvc, Gates: s.gates, Principal: loadPrincipal,
 		DefaultBranch: c.cfg.GitDefaultBranch, TestMetric: s.metrics.Test,
 		// FTR.HMR.DISC-0001: instructions to the researcher, the basis and the check of the estimate
-		RequestRevision: func(ctx context.Context, p *domain.Principal, g mcp.Grant, key, instructions string) (string, error) {
-			r, err := discovery.RequestRevision(ctx, c.pool, discovery.Channel(c.cfg.NabuClientName), p, g, key, instructions)
+		RequestRevision: func(ctx context.Context, p *domain.Principal, g mcp.Grant, key string, brief agent.RevisionBrief) (string, error) {
+			r, err := discovery.RequestRevision(ctx, c.pool, discovery.Channel(c.cfg.NabuClientName), p, g, key, brief)
 			if err != nil {
 				return "", err
 			}
