@@ -126,8 +126,8 @@ var discoverySchema = schema(map[string]any{
 	"services":       map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 	"problemFeature": map[string]any{"type": "string", "description": "For a Problem: key of the feature with the error, if it exists in Hammurapi"},
 	"estimate":       estimateSchema,
-	"questions": map[string]any{"type": "array", "description": "The open questions to the experts: one round, at most 5, most important first; " +
-		"only decisions of the experts, never facts you can find. Shown as a block of their own; an empty array — no questions left.",
+	"questions": map[string]any{"type": "array", "description": "The open questions to the experts: one round, at most 10, most important first, at most 5 rounds per issue; " +
+		"only decisions of the experts on accepting the issue (value, scope, conflicts with accepted decisions, estimate), never design or implementation, never facts you can find. Shown as a block of their own; an empty array — no questions left.",
 		"items": map[string]any{"type": "object", "properties": map[string]any{
 			"id":          map[string]any{"type": "string", "description": "Only for a question asked again: its number, e.g. Q3; a new question has none"},
 			"title":       map[string]any{"type": "string", "description": "A few words"},

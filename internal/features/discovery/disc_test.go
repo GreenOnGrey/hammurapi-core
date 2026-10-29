@@ -60,7 +60,8 @@ func TestPromptOfQuestions(t *testing.T) {
 		Questions: []cycledata.Question{{ID: "Q2", Round: 1, QuestionText: cycledata.QuestionText{Title: "Источник метрики", Body: "Где считать?", Recommended: "VictoriaMetrics"}}}}
 	p := Prompt(is, prev, nil, nil, reqs, nil)
 	for _, want := range []string{
-		"at most 5 questions", "leave it for a later round", "(допущение, см. Q<n>)", "Do not write a section «Открытые вопросы»",
+		"at most 10 questions", "at most 5 rounds per issue", "leave it for a later round", "high-level assessment, not product design", "never open a new topic", "questions is empty",
+		"never give the id of an answered question again", "Rounds of questions used: 0 of 5.", "(допущение, см. Q<n>)", "Do not write a section «Открытые вопросы»",
 		"Never wait for an answer", "Skills and instructions you have may refine",
 		"- Q2 «Источник метрики»: Где считать? Recommended: VictoriaMetrics",
 		"Q2 «Источник метрики»: VictoriaMetrics — Анна, memory: proposed by the personal agent",
@@ -76,6 +77,9 @@ func TestPromptOfQuestions(t *testing.T) {
 		if strings.Contains(p, not) {
 			t.Fatalf("the prompt has %q", not)
 		}
+	}
+	if r := roundsLeft(&cycledata.Discovery{Counters: cycledata.QuestionCounters{Round: 5}}); !strings.Contains(r, "All 5 rounds of questions are used") {
+		t.Fatalf("QS-21: %q", r)
 	}
 	if s := historyLine(reqs[0]); s != "answers — Q2: VictoriaMetrics" {
 		t.Fatalf("history of answers: %q", s)

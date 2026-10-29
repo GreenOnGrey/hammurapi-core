@@ -52,10 +52,19 @@ func TestNumberQuestions(t *testing.T) {
 	if next, _, _ := NumberQuestions(nil, c2, []QuestionInput{q("", "f")}); ids(next) != "Q6/3" {
 		t.Fatalf("after all answered: %s", ids(next))
 	}
-	// QS-01: over the limit; a question without a recommendation; the same number twice
-	many := []QuestionInput{q("Q2", "x"), q("Q2", "y"), {QuestionText: QuestionText{Title: "no rec"}}, q("", "1"), q("", "2"), q("", "3"), q("", "4")}
-	if got, _, dropped := NumberQuestions(second, c2, many); ids(got) != "Q2/1 Q6/3 Q7/3 Q8/3 Q9/3" || dropped != 2 {
+	// QS-01: over the limit of a round; a question without a recommendation; the same number twice
+	many := []QuestionInput{q("Q2", "x"), q("Q2", "y"), {QuestionText: QuestionText{Title: "no rec"}}}
+	for i := range 9 {
+		many = append(many, q("", strconv.Itoa(i)))
+	}
+	if got, _, dropped := NumberQuestions(second, c2, many); len(got) != MaxQuestions || ids(got)[:13] != "Q2/1 Q6/3 Q7/" || dropped != 2 {
 		t.Fatalf("limit: %s dropped %d", ids(got), dropped)
+	}
+	// QS-21: after the last round new questions are dropped, open ones asked again stay
+	last := QuestionCounters{Seq: 9, Round: MaxRounds}
+	open := []Question{{ID: "Q9", Round: MaxRounds, QuestionText: QuestionText{Title: "t", Recommended: "r"}}}
+	if got, c, dropped := NumberQuestions(open, last, []QuestionInput{q("Q9", "again"), q("", "new")}); ids(got) != "Q9/"+strconv.Itoa(MaxRounds) || c != last || dropped != 1 {
+		t.Fatalf("rounds: %s %+v dropped %d", ids(got), c, dropped)
 	}
 	// QS-04: long fields are cut, empty options and the fifth one dropped
 	long := QuestionInput{QuestionText: QuestionText{Title: strings.Repeat("т", 300), Recommended: "r", Options: []string{"a", " ", "b", "c", "d", "e"}}}

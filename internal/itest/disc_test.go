@@ -983,8 +983,9 @@ func TestDiscoveryQuestions(t *testing.T) {
 	for _, qu := range v.Questions {
 		ids = append(ids, fmt.Sprintf("%s/%d", qu.ID, qu.Round))
 	}
-	if strings.Join(ids, " ") != "Q2/1 Q4/2 Q5/2" || v.QuestionRound != 2 {
-		t.Fatalf("QS-02 second round: %v", ids)
+	// QS-22: Q2 was answered: the researcher giving its number again asks a new question
+	if strings.Join(ids, " ") != "Q4/2 Q5/2 Q6/2" || v.QuestionRound != 2 {
+		t.Fatalf("QS-02, QS-22 second round: %v", ids)
 	}
 	revs, err := cycledata.New(pool).Revisions(ctx, is.ID)
 	must(t, err)
@@ -999,16 +1000,16 @@ func TestDiscoveryQuestions(t *testing.T) {
 	brief := func(b agent.RevisionBrief) (*discovery.Request, error) {
 		return discovery.RequestRevision(ctx, pool, ch, r.anna, r.grant(r.anna, conv.ConversationID, ch), is.Key, b)
 	}
-	if _, err := brief(agent.RevisionBrief{Answers: []cycledata.Answer{{QuestionID: "Q1", Answer: "x", Source: "user"}}}); !strings.Contains(toolMsg(err), "unknown question Q1: open questions are Q2, Q4, Q5") {
+	if _, err := brief(agent.RevisionBrief{Answers: []cycledata.Answer{{QuestionID: "Q1", Answer: "x", Source: "user"}}}); !strings.Contains(toolMsg(err), "unknown question Q1: open questions are Q4, Q5, Q6") {
 		t.Fatalf("QS-16: %v", err)
 	}
 	if _, err := brief(agent.RevisionBrief{Context: strings.Repeat("я", discovery.MaxInstructions+1), Instructions: "x"}); !strings.Contains(toolMsg(err), "context: up to 4000") {
 		t.Fatalf("QS-16 context: %v", err)
 	}
 	req, err = brief(agent.RevisionBrief{Context: "Команда FMS считает метрики в VictoriaMetrics",
-		Answers: []cycledata.Answer{{QuestionID: "q2", Answer: "VictoriaMetrics", Source: cycledata.AnswerMemory}}})
+		Answers: []cycledata.Answer{{QuestionID: "q4", Answer: "VictoriaMetrics", Source: cycledata.AnswerMemory}}})
 	must(t, err)
-	if got, _ = discovery.GetRequest(ctx, pool, req.ID); got.Context == nil || len(got.Answers) != 1 || got.Answers[0].QuestionID != "Q2" ||
+	if got, _ = discovery.GetRequest(ctx, pool, req.ID); got.Context == nil || len(got.Answers) != 1 || got.Answers[0].QuestionID != "Q4" ||
 		got.Answers[0].Source != cycledata.AnswerMemory || got.Instructions != "" {
 		t.Fatalf("QS-15: %+v", got)
 	}
@@ -1037,7 +1038,7 @@ func TestDiscoveryQuestionsDropped(t *testing.T) {
 	ctx := context.Background()
 	r := newDiscRig(t)
 	var qs []cycledata.QuestionInput
-	for i := range 7 {
+	for i := range cycledata.MaxQuestions + 2 {
 		qs = append(qs, cycledata.QuestionInput{QuestionText: cycledata.QuestionText{Title: fmt.Sprintf("q%d", i), Body: "?", Recommended: "да"}})
 	}
 	r.research = func(int) ([]workflows.NewEvent, error) {
@@ -1057,7 +1058,7 @@ func TestDiscoveryQuestionsDropped(t *testing.T) {
 	r.run()
 	v, err := r.disc.Get(ctx, is.Key)
 	must(t, err)
-	if len(v.Questions) != cycledata.MaxQuestions || v.Questions[4].ID != "Q5" {
+	if len(v.Questions) != cycledata.MaxQuestions || v.Questions[9].ID != "Q10" {
 		t.Fatalf("QS-01: %+v", v.Questions)
 	}
 	if n := plainCounter("hammurapi_discovery_questions_dropped_total") - before; n != 2 {

@@ -9,9 +9,14 @@ import (
 // The open questions of the researcher to the experts (FTR.HMR.DISC-0001 R26,
 // tech §5.6): one round at a time, numbered by the server through all rounds.
 
-// MaxQuestions bounds the open questions of a round; the rest are dropped,
-// not refused: a refusal made the agent write the whole document again.
-const MaxQuestions = 5
+// MaxQuestions bounds the open questions of a round and MaxRounds the rounds
+// of an issue; the rest are dropped, not refused: a refusal made the agent
+// write the whole document again. Without the bound of rounds the researcher
+// went deeper and deeper (18 rounds on ISS.NAB-0009).
+const (
+	MaxQuestions = 10
+	MaxRounds    = 5
+)
 
 // Bounds of the fields of a question; a longer field is cut with an ellipsis.
 const (
@@ -81,8 +86,9 @@ type Answer struct {
 
 // NumberQuestions numbers the questions of a new revision: a question asked
 // again keeps its number and round, a new one gets the next number and the
-// next round; numbers are never reused. dropped counts the questions over
-// MaxQuestions or without a title or a recommendation.
+// next round; numbers are never reused. New questions after MaxRounds are
+// dropped, those asked again stay. dropped counts the questions over the
+// bounds or without a title or a recommendation.
 func NumberQuestions(prev []Question, c QuestionCounters, in []QuestionInput) (open []Question, next QuestionCounters, dropped int) {
 	asked := map[string]Question{}
 	for _, q := range prev {
@@ -107,6 +113,10 @@ func NumberQuestions(prev []Question, c QuestionCounters, in []QuestionInput) (o
 			q.ID, q.Round = p.ID, p.Round
 			delete(asked, id) // a second question with the number is new
 		} else {
+			if !begun && next.Round >= MaxRounds {
+				dropped++
+				continue
+			}
 			if !begun {
 				begun = true
 				next.Round++

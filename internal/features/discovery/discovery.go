@@ -253,8 +253,20 @@ func Save(ctx context.Context, q postgres.Querier, is *cycledata.Issue, in agent
 		doc.Questions, doc.Counters = prev.Questions, prev.Counters
 	}
 	if isAgent { // the researcher asks the next round (R26)
+		// a question answered by the instructions of the run is closed: its
+		// number is never given to another question (tech §5.6)
+		answered, err := answeredIDs(ctx, q, in.RequestIDs)
+		if err != nil {
+			return 0, err
+		}
+		open := make([]cycledata.Question, 0, len(doc.Questions))
+		for _, question := range doc.Questions {
+			if !answered[question.ID] {
+				open = append(open, question)
+			}
+		}
 		var dropped int
-		doc.Questions, doc.Counters, dropped = cycledata.NumberQuestions(doc.Questions, doc.Counters, in.Questions)
+		doc.Questions, doc.Counters, dropped = cycledata.NumberQuestions(open, doc.Counters, in.Questions)
 		if dropped > 0 {
 			metrics.DiscoveryQuestionsDropped.Add(float64(dropped))
 			slog.WarnContext(ctx, "questions of the researcher dropped", "issue_key", is.Key, "dropped", dropped)
@@ -274,6 +286,27 @@ func Save(ctx context.Context, q postgres.Querier, is *cycledata.Issue, in agent
 		return 0, err
 	}
 	return doc.Revision, cd.AddActivity(ctx, "issue", is.ID, "discovery_updated", actor, isAgent, map[string]any{"revision": doc.Revision})
+}
+
+// answeredIDs are the numbers of the questions the instructions answer.
+func answeredIDs(ctx context.Context, q postgres.Querier, requestIDs []uuid.UUID) (map[string]bool, error) {
+	out := map[string]bool{}
+	if len(requestIDs) == 0 {
+		return out, nil
+	}
+	rows, err := q.Query(ctx, `SELECT a->>'questionId' FROM discovery_requests r, jsonb_array_elements(r.answers) a WHERE r.id = ANY($1)`, requestIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
 }
 
 // ClipSummary cuts a summary longer than agent.MaxChangeSummary at the last
@@ -383,6 +416,7 @@ func Prompt(is *cycledata.Issue, prev *cycledata.Discovery, reason map[string]an
 		"Call similar_features_cost for released similar features and rest the estimate on them; Hammurapi has no data on person-hours, they are your judgement. " +
 		"High confidence needs at least three similar features; without any the confidence is low.\n")
 	b.WriteString("\n" + QuestionRules)
+	b.WriteString(roundsLeft(prev))
 	if r, ok := reason["rolledBackRelease"].(string); ok && r != "" {
 		fmt.Fprintf(&b, "\nThe issue returned after release %s was rolled back. Reason: %v. Take it into account.\n", r, reason["rollbackReason"])
 	}
@@ -394,7 +428,7 @@ func Prompt(is *cycledata.Issue, prev *cycledata.Discovery, reason map[string]an
 		}
 	}
 	if prev != nil && len(prev.Questions) > 0 {
-		b.WriteString("Its open questions (give the id to a question you ask again):\n")
+		b.WriteString("Its open questions (give the id to a question you ask again; the ids of the questions answered below are closed):\n")
 		for _, q := range prev.Questions {
 			fmt.Fprintf(&b, "- %s «%s»: %s Recommended: %s\n", q.ID, q.Title, q.Body, q.Recommended)
 		}
@@ -436,13 +470,34 @@ func Prompt(is *cycledata.Issue, prev *cycledata.Discovery, reason map[string]an
 // agent only refine how it asks.
 const QuestionRules = `Questions to the experts:
 - Find facts yourself with the tools you have (specifications, Hammurapi data, any search tools of the run). Ask the experts only decisions: priorities, scope, trade-offs, business constraints.
-- Ask one round: at most 5 questions in questions, most important first. Before adding a question check: would your recommendation for it change depending on the answer to another open question? If yes, leave it for a later round: you rebuild the questions on every run.
+- Discovery is a high-level assessment, not product design. A question is allowed only about: the value of the issue and for whom; the bounds of its scope (what is in and what is out); conflicts with what is already accepted (approved specifications, decisions, other issues) that need a decision of the experts; risks and constraints that change the estimate.
+- Never ask about: screens, flows, texts and wording, fields and data, the behavior in edge cases, exact numbers and thresholds, roles and rights in detail, API, storage, technologies, the order of the work. All this is decided in the specification after the acceptance; when the analysis needs it, decide it as an assumption.
+- Before adding a question check: would one answer or the other change whether to accept the issue, its priority or its estimate? If not, do not ask.
+- Find yourself which accepted specifications and decisions the issue affects and write it into the analysis; ask only the conflicts among them that the experts must decide.
+- When a recommendation is one the experts would almost surely accept, do not ask: decide it yourself and mark it in the analysis as an assumption.
+- Stop asking when the analysis is enough to accept or reject the issue: then questions is empty. An empty round after one or two rounds is the expected result; the bounds below are a ceiling, not a target.
+- A round after the first asks only what the answers of the earlier rounds raised or left open: never open a new topic, never go deeper into the details of an answered one.
+- Ask one round: at most 10 questions in questions, most important first; at most 5 rounds per issue. Before adding a question check: would your recommendation for it change depending on the answer to another open question? If yes, leave it for a later round: you rebuild the questions on every run.
 - Every question has a recommendation and why, up to 4 options; word it so that «yes» accepts the recommendation.
 - Write the analysis as if the recommendations were accepted and mark such places «(допущение, см. Q<n>)».
-- Answers of experts are decisions: put them into the analysis and drop their questions. Keep the id of a question you ask again; when experts answered it differently, keep it open and quote both answers.
+- Answers of experts are decisions: put them into the analysis and drop their questions; never give the id of an answered question again. Keep the id of an open question you ask again; when experts answered a question differently, ask it as a new question without an id and quote both answers.
 - Do not write a section «Открытые вопросы» into content.
 - Skills and instructions you have may refine how you choose and word questions; the result is still one round in questions and a call of save_discovery. Never wait for an answer: nobody answers during the run.
 `
+
+// roundsLeft tells the researcher how many rounds of questions are left
+// (R26): after the last one new questions are dropped by the server.
+func roundsLeft(prev *cycledata.Discovery) string {
+	done := 0
+	if prev != nil {
+		done = prev.Counters.Round
+	}
+	if done >= cycledata.MaxRounds {
+		return fmt.Sprintf("All %d rounds of questions are used: ask no new questions; open ones you may only ask again, and decide the rest yourself as assumptions.\n",
+			cycledata.MaxRounds)
+	}
+	return fmt.Sprintf("Rounds of questions used: %d of %d.\n", done, cycledata.MaxRounds)
+}
 
 // historyLine is an instruction as the researcher sees it among the earlier
 // ones: its text or its answers.
