@@ -25,7 +25,6 @@ jobs:
       tag: ${{ steps.m.outputs.tag }}
       image: ${{ steps.m.outputs.image }}
       rebuild: ${{ steps.m.outputs.rebuild }}
-      pi_version: ${{ steps.m.outputs.pi_version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: m
@@ -44,7 +43,6 @@ jobs:
             echo "image=ghcr.io/${GITHUB_REPOSITORY,,}"
             # Образ собирается только по push тега; ручной запуск выкатывает готовый.
             echo "rebuild=$([[ $EVENT == push ]] && echo true || echo false)"
-            echo "pi_version=$(sed -n 's/^PI_VERSION=//p' deploy/versions.env)"
           } >>"$GITHUB_OUTPUT"
 
   lint:
@@ -93,7 +91,6 @@ jobs:
             ${{ needs.meta.outputs.image }}:sha-${{ github.sha }}
           build-args: |
             VERSION=${{ needs.meta.outputs.tag }}
-            PI_VERSION=${{ needs.meta.outputs.pi_version }}
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
@@ -143,7 +140,6 @@ jobs:
           NOTES: |
             Образ: `${{ needs.meta.outputs.image }}:${{ needs.meta.outputs.tag }}` (`${{ needs.build.outputs.digest }}`), подписан cosign.
             hammurapi-core: ${{ needs.meta.outputs.tag }}
-            Агент: Pi (@earendil-works/pi-coding-agent) ${{ needs.meta.outputs.pi_version }}
         run: |
           if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --notes "$NOTES"

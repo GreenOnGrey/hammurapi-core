@@ -71,8 +71,8 @@ type Sent struct {
 }
 
 func (s *Service) prepare(ctx context.Context, p *domain.Principal, key string) (*cycledata.Issue, string, error) {
-	if s.Nabu == nil || domain.AgentDisabled() {
-		return nil, "", apperr.Conflict("agent_disabled", "the agent is not connected: Hammurapi works without the agent")
+	if s.Nabu == nil {
+		return nil, "", apperr.Unavailable("nabu_unavailable", "the agent is temporarily unavailable")
 	}
 	is, _, err := cycledata.New(s.Pool).IssueByKey(ctx, key)
 	if errors.Is(err, cycledata.ErrNotFound) {

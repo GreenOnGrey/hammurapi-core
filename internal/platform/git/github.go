@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -454,4 +455,9 @@ func (g *GitHub) ParsePush(h http.Header, body []byte) (*PushEvent, bool, error)
 		ev.Commits = append(ev.Commits, PushCommit{SHA: c.ID, Message: c.Message, Timestamp: c.Timestamp, Added: c.Added, Modified: c.Modified, Removed: c.Removed})
 	}
 	return ev, true, nil
+}
+
+// Archive implements Archiver: GET /repos/{repo}/tarball/{ref}.
+func (g *GitHub) Archive(ctx context.Context, token, ref string) (io.ReadCloser, error) {
+	return g.api.stream(ctx, "archive", token, g.r("/tarball/"+url.PathEscape(ref)))
 }

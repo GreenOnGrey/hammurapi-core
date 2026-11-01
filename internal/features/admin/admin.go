@@ -57,8 +57,6 @@ type RolesInput struct {
 type Service struct {
 	pool       *pgxpool.Pool
 	identities *auth.Repository
-	// RunnerExecutor is shown in the admin panel (local is not for production, RUN-10).
-	RunnerExecutor string
 }
 
 // NewService creates the service.
@@ -203,7 +201,6 @@ type Settings struct {
 	AttachmentRetentionDays int                    `json:"attachmentRetentionDays"`
 	FeatureFlags            FlagsView              `json:"featureFlags"`
 	Stage                   cycledata.StageSetting `json:"stage"`
-	RunnerExecutor          string                 `json:"runnerExecutor"`
 }
 
 // FlagsView is the feature flag setting without secrets.
@@ -217,7 +214,7 @@ func (s *Service) settings(ctx context.Context) (*Settings, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := &Settings{AttachmentRetentionDays: n, RunnerExecutor: s.RunnerExecutor}
+	out := &Settings{AttachmentRetentionDays: n}
 	cd := cycledata.New(s.pool)
 	var fs cycledata.FlagsSetting
 	if _, err := cd.Setting(ctx, "feature_flags", &fs); err != nil {

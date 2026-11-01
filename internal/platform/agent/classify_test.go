@@ -47,21 +47,6 @@ func TestClassBehaviour(t *testing.T) {
 	}
 }
 
-func TestThinkingLevels(t *testing.T) {
-	high, max := "high", "max"
-	m := ModelDef{ID: "deepseek-v4-pro", Reasoning: true, ThinkingLevelMap: map[string]*string{"minimal": nil, "low": nil, "medium": nil, "high": &high, "xhigh": &max}}
-	got := m.ThinkingLevels()
-	if len(got) != 3 || got[0] != "off" || got[1] != "high" || got[2] != "xhigh" {
-		t.Fatalf("levels %v", got)
-	}
-	if m.SupportsThinking("medium") || !m.SupportsThinking("xhigh") {
-		t.Fatal("support")
-	}
-	if l := (ModelDef{ID: "x"}).ThinkingLevels(); len(l) != 1 || l[0] != "off" {
-		t.Fatalf("no reasoning %v", l)
-	}
-}
-
 func TestScenarios(t *testing.T) {
 	if !ScenarioCodegen.HasCode() || ScenarioChat.HasCode() || ScenarioIssueAnalysis.HasCode() {
 		t.Fatal("code scenarios")

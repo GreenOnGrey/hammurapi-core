@@ -18,7 +18,6 @@ import (
 
 	"github.com/GreenOnGrey/hammurapi-core/internal/domain"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/admin"
-	"github.com/GreenOnGrey/hammurapi-core/internal/features/agent"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/approvals"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/attachments"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/auth"
@@ -314,44 +313,15 @@ func TestRepositories(t *testing.T) {
 		t.Fatalf("number reused: %d", num)
 	}
 
-	// Chat history and attachments.
-	chat := agent.NewRepository(pool)
-	mid, _, err := chat.Insert(ctx, pool, agent.NewMessage{UserID: u.ID, Role: "user", Mode: "general", Content: "hello", IsVoice: true})
-	must(t, err)
+	// Attachments (the chat of the operator is gone, FTR.HMR.CMN-0007 R3).
 	att := attachments.NewService(pool, nil, 1<<20, nil)
 	if _, err := pool.Exec(ctx, `INSERT INTO attachments (user_id, file_name, mime_type, size_bytes, s3_key) VALUES ($1,'a.png','image/png',1,'k1')`, u.ID); err != nil {
 		t.Fatal(err)
 	}
 	al, err := att.List(ctx, u.ID, httpx.Page{Limit: 10})
 	must(t, err)
-	must(t, att.Link(ctx, pool, u.ID, mid, []uuid.UUID{al.Items[0].ID}))
-	msgs, err := chat.History(ctx, u.ID, httpx.Page{Limit: 10})
-	must(t, err)
-	if len(msgs) != 1 || len(msgs[0].Attachments) != 1 || !msgs[0].IsVoice {
-		t.Fatalf("history %+v", msgs)
-	}
-	// FTR.HMR.CMN-0004: one active Pi session per user; the snapshot key survives.
-	s1, err := chat.OpenSession(ctx, u.ID)
-	must(t, err)
-	must(t, chat.SetSessionOperator(ctx, s1.ID, "op-1", "deepseek-v4-flash", "off", uuid.Nil))
-	must(t, chat.SetSnapshot(ctx, s1.ID, "agent/sessions/x.jsonl"))
-	must(t, chat.ClearOperator(ctx, s1.ID))
-	s2, err := chat.OpenSession(ctx, u.ID)
-	must(t, err)
-	if s2.ID != s1.ID || s2.SnapshotKey != "agent/sessions/x.jsonl" || s2.OperatorID != "" {
-		t.Fatalf("session %+v", s2)
-	}
-	must(t, chat.SetErrorClass(ctx, mid, "insufficient_balance"))
-	m, err := chat.Get(ctx, u.ID, mid)
-	must(t, err)
-	if m.ErrorClass == nil || *m.ErrorClass != "insufficient_balance" {
-		t.Fatalf("error class %+v", m)
-	}
-	must(t, chat.CloseSession(ctx, u.ID))
-	s3, err := chat.OpenSession(ctx, u.ID)
-	must(t, err)
-	if s3.ID == s1.ID || s3.SnapshotKey != "" {
-		t.Fatal("a closed session was reused")
+	if len(al.Items) != 1 {
+		t.Fatalf("attachments %+v", al)
 	}
 	// ATT-05: someone else's attachment.
 	_, err = att.Get(ctx, uuid.New(), al.Items[0].ID)

@@ -403,12 +403,14 @@ func (d *DB) SetPRRequirements(ctx context.Context, id uuid.UUID, reqs []string)
 // ─── Agent tasks ─────────────────────────────────────────────────────
 
 const taskCols = `t.id, t.type::text, t.status::text, t.feature_id, t.release_id, t.service_id, s.key, t.workflow_run_id, t.initiator_id,
-	t.token_hash, t.executor_ref, t.input, t.result, t.progress, t.error, t.tokens_in, t.tokens_out, t.created_at, t.started_at, t.finished_at`
+	t.token_hash, t.executor_ref, t.input, t.result, t.progress, t.error, t.tokens_in, t.tokens_out, t.created_at, t.started_at, t.finished_at,
+	t.error_class, t.nabu_run_id::text`
 
 func scanTask(row interface{ Scan(...any) error }) (*Task, error) {
 	var t Task
 	err := row.Scan(&t.ID, &t.Type, &t.Status, &t.FeatureID, &t.ReleaseID, &t.ServiceID, &t.Service, &t.RunID, &t.InitiatorID,
-		&t.TokenHash, &t.ExecutorRef, &t.Input, &t.Result, &t.Progress, &t.Error, &t.TokensIn, &t.TokensOut, &t.CreatedAt, &t.StartedAt, &t.FinishedAt)
+		&t.TokenHash, &t.ExecutorRef, &t.Input, &t.Result, &t.Progress, &t.Error, &t.TokensIn, &t.TokensOut, &t.CreatedAt, &t.StartedAt, &t.FinishedAt,
+		&t.ErrorClass, &t.NabuRunID)
 	return &t, err
 }
 

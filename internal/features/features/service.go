@@ -404,8 +404,8 @@ func PermissionsOf(p *domain.Principal, f *specdata.Feature, gates []specdata.Ga
 		}
 	}
 	// Without the agent nothing is generated (FTR.HMR.CMN-0006 R9).
-	perm.Regenerate = !domain.AgentDisabled() && (!f.ApprovalRequired || HumanGatesApproved(gates))
-	perm.Codegen = !domain.AgentDisabled() && ReadyForCodegen(f, gates)
+	perm.Regenerate = !f.ApprovalRequired || HumanGatesApproved(gates)
+	perm.Codegen = ReadyForCodegen(f, gates)
 	return perm
 }
 

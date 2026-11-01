@@ -31,7 +31,7 @@ func sign(priv ed25519.PrivateKey, c map[string]any) string {
 }
 
 // NB-05…07: calls of the personal agent run with the rights of the delegated
-// user; without the delegation header — 403; without Nabu — 503 agent_disabled.
+// user; without the delegation header — 403; without the verifier — 503 nabu_unavailable.
 func TestMCPHandler(t *testing.T) {
 	pub, priv, _ := ed25519.GenerateKey(nil)
 	jwks := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -82,7 +82,7 @@ func TestMCPHandler(t *testing.T) {
 		t.Fatalf("bad token: %d", w.Code)
 	}
 	off := &MCPHandler{Server: srv, EnsureUser: h.EnsureUser}
-	if w := call(off, tok, "ann@x.org"); w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "agent_disabled") {
+	if w := call(off, tok, "ann@x.org"); w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "nabu_unavailable") {
 		t.Fatalf("without Nabu: %d %s", w.Code, w.Body)
 	}
 }
@@ -238,20 +238,20 @@ func TestChatEventsBridge(t *testing.T) {
 	}
 }
 
-// The transfer passes the git source of skills only when /agent/skills has skills.
-func TestSkillsSource(t *testing.T) {
-	for _, snap := range []string{"", "null", "[]"} {
-		if sk := skillsSource(json.RawMessage(snap), "org/specs", "main"); sk != nil {
-			t.Fatalf("snapshot %q: %v", snap, sk)
+// FTR.HMR.CMN-0007 R14: the rows of the binding mark the scenarios that change code.
+func TestScenarioRows(t *testing.T) {
+	got := map[string]bool{}
+	for _, r := range scenarioRows() {
+		got[r.Name] = r.Code
+	}
+	want := map[string]bool{"issue_analysis": false, "gate_generation": false, "conformance_check": false,
+		"codegen": true, "review_update": true, "rollback_revert": true}
+	if len(got) != len(want) {
+		t.Fatalf("rows: %v", got)
+	}
+	for k, v := range want {
+		if c, ok := got[k]; !ok || c != v {
+			t.Errorf("%s: %v %v", k, c, ok)
 		}
-	}
-	snap := json.RawMessage(`[{"name":"review","scenarios":["codegen"]}]`)
-	if sk := skillsSource(snap, "", "main"); sk != nil {
-		t.Fatalf("without the repository: %v", sk)
-	}
-	sk := skillsSource(snap, "org/specs", "main")
-	as, _ := sk["assignments"].(map[string][]string)
-	if sk["repo"] != "org/specs" || sk["path"] != "agent/skills" || sk["ref"] != "main" || len(as["review"]) != 1 || as["review"][0] != "codegen" {
-		t.Fatalf("%v", sk)
 	}
 }

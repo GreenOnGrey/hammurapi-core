@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -338,4 +339,9 @@ func (g *GitLab) ParsePush(h http.Header, body []byte) (*PushEvent, bool, error)
 		ev.Commits = append(ev.Commits, PushCommit{SHA: c.ID, Message: c.Message, Timestamp: c.Timestamp, Added: c.Added, Modified: c.Modified, Removed: c.Removed})
 	}
 	return ev, true, nil
+}
+
+// Archive implements Archiver: GET /projects/{id}/repository/archive.tar.gz.
+func (g *GitLab) Archive(ctx context.Context, token, ref string) (io.ReadCloser, error) {
+	return g.api.stream(ctx, "archive", token, g.p("/repository/archive.tar.gz?sha="+url.QueryEscape(ref)))
 }

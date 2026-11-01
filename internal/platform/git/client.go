@@ -212,3 +212,44 @@ func pathEscapeSegments(p string) string {
 	}
 	return strings.Join(parts, "/")
 }
+
+// Archiver streams a tar.gz of a ref (FTR.HMR.CMN-0007 tech §7.2): the working
+// copy of a code task in one request. Entries carry a top directory the
+// caller strips. Providers without it are read file by file.
+type Archiver interface {
+	Archive(ctx context.Context, token, ref string) (io.ReadCloser, error)
+}
+
+// stream performs a GET and returns the body to read; redirects (codeload of
+// GitHub) are followed by the client.
+func (c *apiClient) stream(ctx context.Context, op, token, path string) (io.ReadCloser, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseAPI+path, nil)
+	if err != nil {
+		return nil, err
+	}
+	if token != "" {
+		k, v := c.authHeader(token)
+		req.Header.Set(k, v)
+	}
+	// The archive may take minutes: no client timeout, the context bounds it.
+	hc := *c.http
+	hc.Timeout = 0
+	resp, err := hc.Do(req)
+	if err != nil {
+		c.fail(op)
+		return nil, fmt.Errorf("%s %s: %w", c.provider, op, err)
+	}
+	if resp.StatusCode >= 400 {
+		defer resp.Body.Close()
+		c.fail(op)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		switch resp.StatusCode {
+		case http.StatusNotFound:
+			return nil, ErrNotFound
+		case http.StatusUnauthorized:
+			return nil, ErrUnauthorized
+		}
+		return nil, &APIError{Provider: c.provider, Status: resp.StatusCode, Message: errorMessage(body, resp.Status)}
+	}
+	return resp.Body, nil
+}

@@ -374,9 +374,6 @@ const (
 // the text of the answer; the result goes to the topic of the expert if
 // there is one.
 func AnswerQuestions(ctx context.Context, pool *pgxpool.Pool, p *domain.Principal, issueKey string, in AnswersInput) (*Request, error) {
-	if domain.AgentDisabled() {
-		return nil, apperr.AgentDisabled()
-	}
 	var q postgres.Querier = pool
 	is, err := revisable(ctx, q, p, issueKey)
 	if err != nil {

@@ -9,14 +9,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/GreenOnGrey/hammurapi-core/internal/cycledata"
-	"github.com/GreenOnGrey/hammurapi-core/internal/domain"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/agent"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/auth"
-	"github.com/GreenOnGrey/hammurapi-core/internal/features/codegen"
-	"github.com/GreenOnGrey/hammurapi-core/internal/features/discovery"
-	"github.com/GreenOnGrey/hammurapi-core/internal/features/issues"
-	"github.com/GreenOnGrey/hammurapi-core/internal/specdata"
-	tu "github.com/GreenOnGrey/hammurapi-core/internal/testutil"
 )
 
 // FTR.HMR.CMN-0006 §1.1: sign-in through a new provider finds the earlier
@@ -87,63 +81,6 @@ func TestIdentities(t *testing.T) {
 	if again != id || via != "nabu_delegation" {
 		t.Fatalf("NB-05: %v %v %s", id, again, via)
 	}
-}
-
-// NA-01…04: without the agent an issue goes to verification with an empty
-// Discovery, tech and qa are edited by people, code generation is refused.
-func TestWithoutAgent(t *testing.T) {
-	ctx := context.Background()
-	domain.SetAgentDisabled(true)
-	defer domain.SetAgentDisabled(false)
-	store := specdata.NewPG(pool)
-
-	var olga uuid.UUID
-	must(t, pool.QueryRow(ctx, `INSERT INTO users (provider_uid, username, display_name, language, agent_name, agent_tone)
-		VALUES ('o1','olga','Olga','en','Codex','business') RETURNING id`).Scan(&olga))
-	must(t, pool.QueryRow(ctx, `WITH d AS (INSERT INTO domains (key, name) VALUES ('NAG','No agent') RETURNING id)
-		INSERT INTO domain_experts (domain_id, user_id, kind) SELECT d.id, $1, 'product' FROM d RETURNING $1::uuid`, olga).Scan(&olga))
-	p := tu.User("expert:NAG:product")
-	p.UserID = olga
-
-	iss := issues.NewService(store, nil, nil, nopEvents{})
-	is, err := iss.Create(ctx, p, issues.CreateInput{Type: domain.IssueIdea, Domain: "NAG", Title: "Manual analysis"})
-	must(t, err)
-	if is.Status != domain.IssueVerification {
-		t.Fatalf("NA-01: status %s", is.Status)
-	}
-	var runs int
-	must(t, pool.QueryRow(ctx, `SELECT count(*) FROM workflow_runs WHERE subject_id = $1`, is.ID).Scan(&runs))
-	if runs != 0 {
-		t.Fatal("NA-01: Discovery must not start")
-	}
-	disc := discovery.NewService(pool, nopEvents{})
-	v, err := disc.Get(ctx, is.Key)
-	must(t, err)
-	if v.Content != discovery.EmptyTemplate || len(v.Missing) == 0 {
-		t.Fatalf("NA-01: document %+v", v)
-	}
-	// NA-02: the expert fills the document by hand.
-	tu.Code(t, iss.Rediscover(ctx, p, is.Key), 409, "agent_disabled")
-	metricSource(t, "prom", "prometheus")
-	measure := &cycledata.Measure{Source: "prom", Query: "q", Target: ">1", Window: "7d"}
-	must(t, disc.Edit(ctx, p, is.Key, agentInput("## Ценность\n\nA lot", "A lot", measure)))
-	v, err = disc.Get(ctx, is.Key)
-	must(t, err)
-	if len(v.Missing) != 0 {
-		t.Fatalf("NA-02: missing %v", v.Missing)
-	}
-	var byAgent bool
-	must(t, pool.QueryRow(ctx, `SELECT is_agent FROM discovery_revisions WHERE issue_id = $1 ORDER BY revision DESC LIMIT 1`, is.ID).Scan(&byAgent))
-	if byAgent {
-		t.Fatal("a manual edit is recorded as the agent's")
-	}
-
-	// NA-03, NA-04.
-	if domain.AreaTech.Generated() || domain.AreaQA.Generated() {
-		t.Fatal("NA-03: tech and qa are written by people")
-	}
-	_, err = codegen.StartTask(ctx, pool, codegen.TaskSpec{Type: codegen.TaskImplement})
-	tu.Code(t, err, 409, "agent_disabled")
 }
 
 func agentInput(content, value string, m *cycledata.Measure) agent.DiscoveryInput {

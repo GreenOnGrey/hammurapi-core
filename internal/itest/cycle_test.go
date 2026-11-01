@@ -209,7 +209,7 @@ func TestCycle(t *testing.T) {
 			TaskID uuid.UUID `json:"taskId"`
 		}
 		_ = json.Unmarshal(raw, &in)
-		_, hash := codegen.NewToken()
+		_, hash := codegen.TaskToken([]byte("k"), in.TaskID)
 		must(t, cd.StartTask(ctx, in.TaskID, hash, "test"))
 		return []workflows.NewEvent{{Type: "started", Payload: map[string]string{}}}, nil
 	}})

@@ -9,8 +9,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"log/slog"
 	"net/http"
 	"time"
 
@@ -33,7 +31,6 @@ var ServiceScenarios = []agent.Scenario{agent.ScenarioIssueAnalysis, agent.Scena
 // Settings are admin_settings.nabu.
 type Settings struct {
 	Scenarios map[string]string `json:"scenarios"`
-	Migrated  bool              `json:"migrated"`
 }
 
 // Service is the connection to Nabu; Client is nil without NABU_URL (R9).
@@ -47,9 +44,6 @@ type Service struct {
 
 // Enabled reports whether the agent of Nabu is connected (R4).
 func (s *Service) Enabled() bool { return s != nil && s.Client != nil }
-
-// ErrDisabled is agent_disabled (tech §8): an action of the agent without Nabu.
-func ErrDisabled() error { return apperr.AgentDisabled() }
 
 // ErrUnavailable is nabu_unavailable.
 func ErrUnavailable() error {
@@ -119,14 +113,34 @@ func (s *Service) UsesNabu(ctx context.Context, sc agent.Scenario) bool {
 }
 
 // View is GET /admin/api/v1/nabu (tech §3.3).
+// ScenarioRow is a row of the binding: Code — the scenario changes code and
+// its agent needs the sandbox of Nabu (FTR.HMR.CMN-0007 R14).
+type ScenarioRow struct {
+	Name string `json:"name"`
+	Code bool   `json:"code"`
+}
+
+func scenarioRows() []ScenarioRow {
+	out := make([]ScenarioRow, 0, len(ServiceScenarios))
+	for _, sc := range ServiceScenarios {
+		out = append(out, ScenarioRow{Name: string(sc), Code: sc.HasCode()})
+	}
+	return out
+}
+
+// View is the answer of GET /admin/api/v1/nabu.
 type View struct {
-	Connected bool              `json:"connected"`
-	URL       string            `json:"url"`
-	Error     string            `json:"error,omitempty"`
+	Connected bool   `json:"connected"`
+	URL       string `json:"url"`
+	Error     string `json:"error,omitempty"`
+	// LastOKAt is when this instance last got an answer of Nabu (R2).
+	LastOKAt  *time.Time        `json:"lastOkAt,omitempty"`
 	Agents    []nabu.Agent      `json:"agents"`
 	Scenarios map[string]string `json:"scenarios"`
-	Migrated  bool              `json:"migrated"`
 	Client    string            `json:"client"`
+	// ScenarioRows are the scenarios of the binding in order: the web keeps
+	// no list of its own.
+	ScenarioRows []ScenarioRow `json:"scenarioRows"`
 }
 
 // View collects the state of the connection.
@@ -135,7 +149,7 @@ func (s *Service) View(ctx context.Context) (*View, error) {
 	if err != nil {
 		return nil, err
 	}
-	v := &View{Scenarios: st.Scenarios, Migrated: st.Migrated, Agents: []nabu.Agent{}}
+	v := &View{Scenarios: st.Scenarios, Agents: []nabu.Agent{}, ScenarioRows: scenarioRows()}
 	if !s.Enabled() {
 		return v, nil
 	}
@@ -143,6 +157,9 @@ func (s *Service) View(ctx context.Context) (*View, error) {
 	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	agents, err := s.Client.Agents(cctx)
+	if t := s.Client.LastOK(); !t.IsZero() {
+		v.LastOKAt = &t
+	}
 	if err != nil {
 		v.Error = err.Error()
 		return v, nil
@@ -154,7 +171,7 @@ func (s *Service) View(ctx context.Context) (*View, error) {
 // PutScenarios binds scenarios to service agents allowed to the client (NB-09).
 func (s *Service) PutScenarios(ctx context.Context, in map[string]*string) (*View, error) {
 	if !s.Enabled() {
-		return nil, ErrDisabled()
+		return nil, ErrUnavailable()
 	}
 	agents, err := s.Client.Agents(ctx)
 	if err != nil {
@@ -187,152 +204,7 @@ func (s *Service) PutScenarios(ctx context.Context, in map[string]*string) (*Vie
 	return s.View(ctx)
 }
 
-// ─── transfer of the agent settings (R11, tech §4) ──────────────────
-
-type choice struct {
-	ConnectionRef string `json:"connectionRef"`
-	Model         string `json:"model"`
-	Thinking      string `json:"thinking"`
-}
-
-// ImportBody builds the body of POST /client/v1/import/hammurapi-agent from
-// the settings of FTR.HMR.CMN-0004; secrets are decrypted in memory only.
-func (s *Service) ImportBody(ctx context.Context) (map[string]any, error) {
-	body := map[string]any{}
-	rows, err := s.Pool.Query(ctx, `SELECT id, name, type, base_url, models, api_key_enc FROM llm_connections WHERE enabled ORDER BY created_at`)
-	if err != nil {
-		return nil, err
-	}
-	conns := []map[string]any{}
-	for rows.Next() {
-		var id, name, typ, base string
-		var models json.RawMessage
-		var keyEnc []byte
-		if err := rows.Scan(&id, &name, &typ, &base, &models, &keyEnc); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		key, err := s.Box.Open(keyEnc)
-		if err != nil {
-			rows.Close()
-			return nil, fmt.Errorf("decrypt the key of %s: %w", name, err)
-		}
-		var defs []json.RawMessage
-		_ = json.Unmarshal(models, &defs)
-		conns = append(conns, map[string]any{"ref": id, "name": name, "type": typ, "baseUrl": base, "apiKey": key, "models": defs})
-	}
-	rows.Close()
-	body["connections"] = conns
-	scen := map[string]choice{}
-	rows, err = s.Pool.Query(ctx, `SELECT scenario::text, connection_id::text, model, thinking FROM agent_scenario_models`)
-	if err != nil {
-		return nil, err
-	}
-	for rows.Next() {
-		var sc string
-		var c choice
-		if err := rows.Scan(&sc, &c.ConnectionRef, &c.Model, &c.Thinking); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		scen[sc] = c
-	}
-	rows.Close()
-	body["scenarios"] = scen
-	var d choice
-	if err := s.Pool.QueryRow(ctx, `SELECT connection_id::text, model, thinking FROM agent_default_model`).Scan(&d.ConnectionRef, &d.Model, &d.Thinking); err == nil {
-		body["default"] = d
-	}
-	rows, err = s.Pool.Query(ctx, `SELECT name, url, headers_enc, exposure::text, scenarios::text[] FROM mcp_servers WHERE enabled ORDER BY name`)
-	if err != nil {
-		return nil, err
-	}
-	mcp := []map[string]any{}
-	for rows.Next() {
-		var name, url, exp string
-		var enc []byte
-		var scs []string
-		if err := rows.Scan(&name, &url, &enc, &exp, &scs); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		headers := map[string]string{}
-		if len(enc) > 0 {
-			pt, err := s.Box.Open(enc)
-			if err != nil {
-				rows.Close()
-				return nil, fmt.Errorf("decrypt the headers of %s: %w", name, err)
-			}
-			_ = json.Unmarshal([]byte(pt), &headers)
-		}
-		mcp = append(mcp, map[string]any{"name": name, "url": url, "headers": headers, "exposure": exp, "scenarios": scs})
-	}
-	rows.Close()
-	body["mcp"] = mcp
-	var skills json.RawMessage
-	_ = s.Pool.QueryRow(ctx, `SELECT skills FROM agent_skill_snapshots ORDER BY created_at DESC LIMIT 1`).Scan(&skills)
-	if sk := skillsSource(skills, s.SkillsRepo, s.DefaultBranch); sk != nil {
-		body["skills"] = sk
-	}
-	return body, nil
-}
-
-// skillsSource is the git source of skills for Nabu with their scenarios, or
-// nil when the latest snapshot of /agent/skills has no skills: Nabu would
-// create a catalog item for a directory that does not exist.
-func skillsSource(snapshot json.RawMessage, repo, ref string) map[string]any {
-	var list []struct {
-		Name      string   `json:"name"`
-		Scenarios []string `json:"scenarios"`
-	}
-	_ = json.Unmarshal(snapshot, &list)
-	if len(list) == 0 || repo == "" {
-		return nil
-	}
-	assignments := map[string][]string{}
-	for _, sk := range list {
-		assignments[sk.Name] = sk.Scenarios
-	}
-	return map[string]any{"repo": repo, "path": "agent/skills", "ref": ref, "assignments": assignments}
-}
-
-// Migrate transfers the settings and binds the scenarios to the created
-// service agents (MG-01); on any error Hammurapi stays unchanged (MG-03).
-func (s *Service) Migrate(ctx context.Context) (map[string]any, error) {
-	if !s.Enabled() {
-		return nil, ErrDisabled()
-	}
-	body, err := s.ImportBody(ctx)
-	if err != nil {
-		return nil, err
-	}
-	cctx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-	rep, err := s.Client.Import(cctx, body)
-	if err != nil {
-		return nil, MapErr(err)
-	}
-	st, err := s.Get(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if sa, ok := rep["serviceAgents"].(map[string]any); ok {
-		for sc, name := range sa {
-			if n, ok := name.(string); ok && n != "" {
-				st.Scenarios[sc] = n
-			}
-		}
-	}
-	st.Migrated = true
-	if err := s.put(ctx, st); err != nil {
-		return nil, err
-	}
-	// MG-02: the journal holds counts, never secrets.
-	slog.InfoContext(ctx, "agent settings transferred to Nabu", "connections", len(body["connections"].([]map[string]any)),
-		"mcp", len(body["mcp"].([]map[string]any)), "scenarios", len(st.Scenarios))
-	return rep, nil
-}
-
+// ─── administration (FTR.HMR.CMN-0006 R8) ───────────────────────────
 // AdminRoutes mounts /nabu (global administrators only).
 func (s *Service) AdminRoutes(r chi.Router) {
 	r.Route("/nabu", func(r chi.Router) {
@@ -363,14 +235,6 @@ func (s *Service) AdminRoutes(r chi.Router) {
 				return err
 			}
 			httpx.JSON(w, 200, v)
-			return nil
-		}))
-		r.Post("/migrate", httpx.Handler(func(w http.ResponseWriter, r *http.Request) error {
-			rep, err := s.Migrate(r.Context())
-			if err != nil {
-				return err
-			}
-			httpx.JSON(w, 200, rep)
 			return nil
 		}))
 	})

@@ -750,3 +750,13 @@ func writeQuestions(b *strings.Builder, qs []cycledata.Question) {
 		b.WriteString("\n")
 	}
 }
+
+// PrincipalLoader loads the principal of a user for the tools of the MCP.
+type PrincipalLoader func(ctx context.Context, userID uuid.UUID) (*domain.Principal, error)
+
+func truncate(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n]) + "…"
+	}
+	return s
+}

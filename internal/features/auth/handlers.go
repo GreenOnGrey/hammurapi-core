@@ -42,8 +42,9 @@ type PublicConfig struct {
 	// Login is the sign-in provider (FTR.HMR.CMN-0006 R1): git | github | oidc,
 	// its label on the button and the organization of GitHub sign-in.
 	Login LoginInfo `json:"login"`
-	// Agent says whether the agent of Nabu is connected (R4, R9).
-	Agent AgentInfo `json:"agent"`
+	// NabuWebURL is the site of Nabu: the card of a code task links to its
+	// run (FTR.HMR.CMN-0007 R11); "" — no link. The agent is always Nabu (R1).
+	NabuWebURL string `json:"nabuWebUrl,omitempty"`
 }
 
 // LoginInfo describes the sign-in provider for the sign-in screen.
@@ -53,12 +54,6 @@ type LoginInfo struct {
 	Org   string `json:"org,omitempty"`
 	// LinksGit: the sign-in account is the git account (it cannot be unlinked).
 	LinksGit bool `json:"linksGit"`
-}
-
-// AgentInfo is the agent block of /api/v1/config (tech §3.1).
-type AgentInfo struct {
-	Enabled  bool   `json:"enabled"`
-	Provider string `json:"provider,omitempty"`
 }
 
 // Handlers serves auth endpoints.

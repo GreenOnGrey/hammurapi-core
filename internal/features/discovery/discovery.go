@@ -29,8 +29,8 @@ import (
 	"github.com/GreenOnGrey/hammurapi-core/internal/cycledata"
 	"github.com/GreenOnGrey/hammurapi-core/internal/domain"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/agent"
-	"github.com/GreenOnGrey/hammurapi-core/internal/features/agentcfg"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/agentrun"
+	"github.com/GreenOnGrey/hammurapi-core/internal/features/usage"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/workflows"
 	agentapi "github.com/GreenOnGrey/hammurapi-core/internal/platform/agent"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/events"
@@ -53,23 +53,7 @@ const EffectDrain = "discovery.drain"
 
 // Start starts Discovery of an issue; an already running Discovery is kept.
 // reason is shown to the agent (e.g. the rollback of a release).
-//
-// Without the agent (FTR.HMR.CMN-0006 R9) no run is created: the issue goes to
-// verification with an empty document, the expert fills value and measure.
 func Start(ctx context.Context, q postgres.Querier, issueID uuid.UUID, reason map[string]any) error {
-	if domain.AgentDisabled() {
-		var exists bool
-		if err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM discovery_docs WHERE issue_id = $1)`, issueID).Scan(&exists); err != nil {
-			return err
-		}
-		cd := cycledata.New(q)
-		if !exists {
-			if err := cd.SaveDiscovery(ctx, &cycledata.Discovery{IssueID: issueID, Content: EmptyTemplate}, nil, false, nil); err != nil {
-				return err
-			}
-		}
-		return cd.SetIssueStatus(ctx, issueID, domain.IssueVerification)
-	}
 	_, err := workflows.Start(ctx, q, Kind, issueID, nil, "queued", reason)
 	if errors.Is(err, workflows.ErrActiveRun) {
 		return nil
@@ -578,7 +562,7 @@ func (e *Effects) Do(ctx context.Context, run workflows.RunRef, payload json.Raw
 	defer cancel()
 	out, err := e.Runner.Once(sctx, agentapi.ScenarioIssueAnalysis, mcp.Grant{UserID: user, Mode: mcp.ModeDiscovery, ContextType: "issue", ContextKey: is.Key, Subject: is.ID},
 		agentrun.System, Prompt(is, prev, r.Context, names, reqs, history))
-	e.Runner.Record(ctx, agentapi.ScenarioIssueAnalysis, out, agentcfg.UsageRecord{Context: "discovery", IssueID: &is.ID, UserID: is.AuthorID})
+	e.Runner.Record(ctx, agentapi.ScenarioIssueAnalysis, out, usage.Record{Context: "discovery", IssueID: &is.ID, UserID: is.AuthorID})
 	if err != nil {
 		return nil, err
 	}

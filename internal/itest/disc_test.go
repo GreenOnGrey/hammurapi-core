@@ -381,11 +381,6 @@ func TestIssueTopics(t *testing.T) {
 	if conv, _ := issuetopics.ConversationOf(ctx, pool, r.boris.UserID, is.ID); conv != "" {
 		t.Fatal("TP-09: the link to a deleted topic stays")
 	}
-	// TP-17: without the agent the topic is unavailable
-	domain.SetAgentDisabled(true)
-	_, err = r.topics.Topic(ctx, r.anna, newKey)
-	domain.SetAgentDisabled(false)
-	tu.Code(t, err, 409, "agent_disabled")
 }
 
 // TP-19, TP-20: the research ends — the topics of the issue are archived in

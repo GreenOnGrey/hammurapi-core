@@ -6,7 +6,6 @@ LDFLAGS := -s -w -X main.version=$(VERSION)
 
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o bin/hammurapi ./cmd/hammurapi
-	CGO_ENABLED=0 go build -trimpath -o bin/fakellm ./cmd/fakellm
 
 generate:
 	go generate ./...

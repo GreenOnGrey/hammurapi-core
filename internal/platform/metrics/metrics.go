@@ -85,14 +85,14 @@ var (
 	WorkflowBlocked = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "hammurapi_workflow_blocked_total", Help: "Workflow runs that became blocked.",
 	}, []string{"kind", "reason"})
-	RunnerTasks = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "hammurapi_runner_tasks", Help: "Agent tasks by type and final status.",
+	CodeTaskStates = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "hammurapi_code_task_states_total", Help: "Code tasks entering a status, by type.",
 	}, []string{"type", "status"})
-	RunnerTaskDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
-		Name: "hammurapi_runner_task_duration_seconds", Help: "Agent task duration.", Buckets: []float64{10, 30, 60, 300, 900, 1800, 3600, 7200},
+	CodeTaskDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name: "hammurapi_code_task_duration_seconds", Help: "Code task duration.", Buckets: []float64{10, 30, 60, 300, 900, 1800, 3600, 7200},
 	}, []string{"type"})
-	RunnerTokens = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "hammurapi_runner_tokens_total", Help: "Agent tokens used by task type.",
+	CodeTokens = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "hammurapi_code_tokens_total", Help: "Agent tokens of code tasks by type.",
 	}, []string{"type"})
 	DeployRuns = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "hammurapi_deploy_runs_total", Help: "Deploy runs by environment and status.",
@@ -129,8 +129,25 @@ func init() {
 		HTTPRequests, HTTPDuration, GitAPIErrors, WebhookEvents, KafkaLag,
 		AgentSessions, AgentProcessStarts, LLMRequests, LLMErrors, LLMTokens, LLMCost, GitProviderUp, GateTransitions,
 		SpecScanRuns, SpecScanDuration, SpecIndexIssuesOpen, SpecDocuments, SpecIndexedFeatures,
-		WorkflowRuns, WorkflowTransitionDuration, WorkflowBlocked, EffectsFailed, RunnerTasks, RunnerTaskDuration,
-		RunnerTokens, DeployRuns, ReleaseRollbacks,
+		WorkflowRuns, WorkflowTransitionDuration, WorkflowBlocked, EffectsFailed, CodeTaskStates, CodeTaskDuration,
+		CodeTokens, DeployRuns, ReleaseRollbacks,
 		DiscoveryRequests, DiscoveryRequestDuration, NabuNotices, IssueTopicsCreated, IssueTopicsArchived, DiscoveryQuestionsDropped,
 	)
 }
+
+// FTR.HMR.CMN-0007 arch §8: code tasks in the sandbox of Nabu.
+var (
+	CodeTasks = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "hammurapi_code_tasks_total", Help: "Finished code tasks by type, result and error class.",
+	}, []string{"type", "result", "error_class"})
+	CodeStartSeconds = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name: "hammurapi_code_start_seconds", Help: "Preparing the working copy and starting the run of Nabu.",
+		Buckets: []float64{1, 3, 10, 30, 60, 120, 300, 600},
+	})
+	CodeApplySeconds = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name: "hammurapi_code_apply_seconds", Help: "Taking the changes of a run and committing them.",
+		Buckets: []float64{1, 3, 10, 30, 60, 120, 300},
+	})
+)
+
+func init() { Registry.MustRegister(CodeTasks, CodeStartSeconds, CodeApplySeconds) }

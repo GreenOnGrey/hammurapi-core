@@ -1,14 +1,12 @@
 package discovery
 
 import (
-	"context"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
-	"github.com/GreenOnGrey/hammurapi-core/internal/apperr"
 	"github.com/GreenOnGrey/hammurapi-core/internal/cycledata"
 	"github.com/GreenOnGrey/hammurapi-core/internal/domain"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/agent"
@@ -83,17 +81,6 @@ func TestPromptOfQuestions(t *testing.T) {
 	}
 	if s := historyLine(reqs[0]); s != "answers — Q2: VictoriaMetrics" {
 		t.Fatalf("history of answers: %q", s)
-	}
-}
-
-// QS-08: without the agent the answers of the page are refused before
-// anything is read.
-func TestAnswersWithoutAgent(t *testing.T) {
-	domain.SetAgentDisabled(true)
-	defer domain.SetAgentDisabled(false)
-	_, err := AnswerQuestions(context.Background(), nil, &domain.Principal{}, "ISS.FMS-0007", AnswersInput{})
-	if e, ok := apperr.As(err); !ok || e.Code != "agent_disabled" || e.Status != 409 {
-		t.Fatalf("got %v", err)
 	}
 }
 

@@ -12,8 +12,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/GreenOnGrey/hammurapi-core/internal/apperr"
-	"github.com/GreenOnGrey/hammurapi-core/internal/domain"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/workflows"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/agent"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/mcp"
@@ -118,13 +116,10 @@ func TestOnceNabuErrors(t *testing.T) {
 	}
 }
 
-// NA: without Nabu and the operator the scenario is blocked with agent_disabled.
-func TestOnceDisabled(t *testing.T) {
-	domain.SetAgentDisabled(true)
-	defer domain.SetAgentDisabled(false)
-	_, err := (&Runner{MCP: mcp.NewServer()}).Once(context.Background(), agent.ScenarioIssueAnalysis, mcp.Grant{}, "", "")
-	e, ok := apperr.As(err)
-	if !isPermanent(err) || !ok || e.Code != "agent_disabled" {
+// FTR.HMR.CMN-0007 HN-09: an unbound scenario is blocked at once.
+func TestOnceUnbound(t *testing.T) {
+	_, err := (&Runner{MCP: mcp.NewServer(), Nabu: &NabuRuns{}}).Once(context.Background(), agent.ScenarioIssueAnalysis, mcp.Grant{}, "", "")
+	if !isPermanent(err) || !IsNoAgent(err) {
 		t.Fatalf("%v", err)
 	}
 }

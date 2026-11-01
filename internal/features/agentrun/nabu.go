@@ -10,8 +10,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/GreenOnGrey/hammurapi-core/internal/apperr"
-	"github.com/GreenOnGrey/hammurapi-core/internal/domain"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/workflows"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/agent"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/mcp"
@@ -40,15 +38,9 @@ func (n *NabuRuns) agentFor(ctx context.Context, sc agent.Scenario) string {
 	return n.Bindings.AgentFor(ctx, sc)
 }
 
-// errNoBackend: neither Nabu nor the operator serves the scenario.
+// errNoBackend: the scenario is not bound to a service agent of Nabu.
 func (n *NabuRuns) errNoBackend(sc agent.Scenario) error {
-	if domain.AgentDisabled() {
-		return workflows.Permanent(apperr.AgentDisabled())
-	}
-	if n != nil && n.Client != nil {
-		return workflows.Permanent(fmt.Errorf("%w: bind the scenario %s to a service agent in Administration → Nabu", ErrNoAgent, sc))
-	}
-	return workflows.Permanent(ErrNoAgent)
+	return workflows.Permanent(fmt.Errorf("%w: bind the scenario %s to a service agent in Administration → Nabu", ErrNoAgent, sc))
 }
 
 // onceNabu runs one scenario as a run of a service agent. The worker MCP is

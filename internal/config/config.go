@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -55,17 +56,6 @@ type Config struct {
 	BotLogin         string // provider login of the bot (agent PRs, own review replies)
 	CIResultsSecret  []string
 
-	// Agent operator (FTR.HMR.CMN-0004 tech §12)
-	AgentAddr         string        // the operator as api and worker reach it
-	AgentRunnerURL    string        // the operator as runner pods reach it
-	AgentServiceToken string        // service token of the operator's internal API
-	AgentIdleTimeout  time.Duration // a chat session idle this long is saved and closed
-	// BootstrapDeepSeekKey creates the first LLM connection once (tech spec §11).
-	BootstrapDeepSeekKey string
-	// BootstrapDeepSeekURL replaces the preset API address of that connection
-	// (development and demos: the scripted fakellm).
-	BootstrapDeepSeekURL string
-
 	BootstrapAdmins []string
 
 	// Sign-in (FTR.HMR.CMN-0006 R1, tech §7): AUTH_PROVIDER empty — the git
@@ -81,8 +71,7 @@ type Config struct {
 	GitHubLoginClientSecret string
 	GitHubAllowedOrg        string
 
-	// Nabu (R4, tech §7): empty NABU_URL — the mode without the agent, unless
-	// the agent operator of FTR.HMR.CMN-0004 is still deployed (AgentEnabled).
+	// Nabu (FTR.HMR.CMN-0006 R4, FTR.HMR.CMN-0007 R1): required.
 	NabuURL          string
 	NabuClientID     string
 	NabuClientSecret string
@@ -90,11 +79,12 @@ type Config struct {
 	// Nabu names the channel of messages written here "client:<name>", and only
 	// that channel may give instructions to the researcher (FTR.HMR.DISC-0001 R6).
 	NabuClientName string
-	NabuJWKSCache  time.Duration
+	// NabuWebURL is the site of Nabu for links to runs (FTR.HMR.CMN-0007 R11); optional.
+	NabuWebURL    string
+	NabuJWKSCache time.Duration
 	// How Nabu reaches the MCP of Hammurapi for service agents (callerMcp):
 	// the worker MCP for its scenarios and the internal /mcp for runner tasks.
 	NabuWorkerMCPURL string
-	NabuTaskMCPURL   string
 
 	UploadMaxBytes     int64
 	UploadAllowedTypes []string
@@ -119,22 +109,14 @@ type Config struct {
 	ImportMaxFiles             int
 	ImportAllowedAssetTypes    []string
 
-	// Runner (FTR.HMR.CMN-0002 arch §15)
-	RunnerExecutor        string // k8s | local
-	RunnerNamespace       string
-	RunnerImage           string
-	RunnerTimeout         time.Duration
-	RunnerTokenLimit      int64
-	RunnerMaxParallel     int
-	RunnerMaxParallelRepo int
-	RunnerWorkdir         string
-	RunnerCPU             string
-	RunnerMemory          string
-	RunnerWorkspacePort   int // the runner's workspace server (FTR.HMR.CMN-0004 arch §4.2)
-	WorkflowMaxAttempts   int
-	WorkflowLease         time.Duration
-	WorkflowDispatchers   int // effects of workflows run at once (FTR.HMR.CMN-0002 arch §5.2)
-	DiscoveryTimeout      time.Duration
+	// Code tasks in the sandbox of Nabu (FTR.HMR.CMN-0007 tech §10): CODE_*;
+	// RUNNER_TIMEOUT and RUNNER_MAX_PARALLEL are read for one release.
+	CodeTimeout         time.Duration
+	CodeMaxParallel     int
+	WorkflowMaxAttempts int
+	WorkflowLease       time.Duration
+	WorkflowDispatchers int // effects of workflows run at once (FTR.HMR.CMN-0002 arch §5.2)
+	DiscoveryTimeout    time.Duration
 
 	// FTR.HMR.CMN-0005: the check of the specification repository and the navigator.
 	SpecScanPushDebounce    time.Duration
@@ -189,16 +171,6 @@ func Load() (*Config, error) {
 		GitLabBotToken:          env("GITLAB_BOT_TOKEN", ""),
 		BotLogin:                env("HAMMURAPI_BOT_LOGIN", ""),
 		CIResultsSecret:         splitList(env("CI_RESULTS_SECRET", ""), ","),
-		RunnerExecutor:          strings.ToLower(env("RUNNER_EXECUTOR", "k8s")),
-		RunnerNamespace:         env("RUNNER_NAMESPACE", "hammurapi-runners"),
-		RunnerImage:             env("RUNNER_IMAGE", ""),
-		RunnerWorkdir:           env("RUNNER_WORKDIR", "/var/lib/hammurapi/runs"),
-		RunnerCPU:               env("RUNNER_CPU", "2"),
-		RunnerMemory:            env("RUNNER_MEMORY", "4Gi"),
-		AgentAddr:               strings.TrimRight(env("AGENT_ADDR", "http://agent:8090"), "/"),
-		AgentServiceToken:       env("AGENT_SERVICE_TOKEN", ""),
-		BootstrapDeepSeekKey:    env("BOOTSTRAP_DEEPSEEK_API_KEY", ""),
-		BootstrapDeepSeekURL:    env("BOOTSTRAP_DEEPSEEK_BASE_URL", ""),
 		BootstrapAdmins:         splitList(env("BOOTSTRAP_ADMINS", ""), ","),
 		AuthProvider:            env("AUTH_PROVIDER", ""),
 		OIDCIssuer:              strings.TrimRight(env("OIDC_ISSUER", ""), "/"),
@@ -213,6 +185,7 @@ func Load() (*Config, error) {
 		NabuClientID:            env("NABU_CLIENT_ID", ""),
 		NabuClientSecret:        env("NABU_CLIENT_SECRET", ""),
 		NabuClientName:          env("NABU_CLIENT_NAME", "hammurapi"),
+		NabuWebURL:              strings.TrimRight(env("NABU_WEB_URL", ""), "/"),
 		DatabaseURL:             env("DATABASE_URL", ""),
 		KafkaBrokers:            splitList(env("KAFKA_BROKERS", ""), ","),
 		S3Endpoint:              env("S3_ENDPOINT", ""),
@@ -225,19 +198,10 @@ func Load() (*Config, error) {
 		DefaultLanguage:         env("DEFAULT_LANGUAGE", "en"),
 	}
 	var err error
-	if c.RunnerWorkspacePort, err = envInt("RUNNER_WORKSPACE_PORT", 8095); err != nil {
+	if c.CodeTimeout, err = envDuration(renamed("CODE_TIMEOUT", "RUNNER_TIMEOUT"), 2*time.Hour); err != nil {
 		return nil, err
 	}
-	if c.RunnerTimeout, err = envDuration("RUNNER_TIMEOUT", 2*time.Hour); err != nil {
-		return nil, err
-	}
-	if c.RunnerTokenLimit, err = envInt64("RUNNER_TOKEN_LIMIT", 3_000_000); err != nil {
-		return nil, err
-	}
-	if c.RunnerMaxParallel, err = envInt("RUNNER_MAX_PARALLEL", 10); err != nil {
-		return nil, err
-	}
-	if c.RunnerMaxParallelRepo, err = envInt("RUNNER_MAX_PARALLEL_PER_REPO", 1); err != nil {
+	if c.CodeMaxParallel, err = envInt(renamed("CODE_MAX_PARALLEL", "RUNNER_MAX_PARALLEL"), 10); err != nil {
 		return nil, err
 	}
 	if c.WorkflowMaxAttempts, err = envInt("WORKFLOW_MAX_ATTEMPTS", 8); err != nil {
@@ -253,9 +217,6 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if c.NabuJWKSCache, err = envDuration("NABU_JWKS_CACHE", 10*time.Minute); err != nil {
-		return nil, err
-	}
-	if c.AgentIdleTimeout, err = envDuration("AGENT_IDLE_TIMEOUT", 15*time.Minute); err != nil {
 		return nil, err
 	}
 	if c.SpecScanPushDebounce, err = envDuration("SPEC_SCAN_PUSH_DEBOUNCE", 30*time.Second); err != nil {
@@ -325,8 +286,6 @@ func Load() (*Config, error) {
 	c.InternalURL = strings.TrimRight(env("INTERNAL_URL", "http://"+localAddr(c.InternalAddr)), "/")
 	c.WorkerMCPURL = strings.TrimRight(env("WORKER_MCP_URL", "http://"+localAddr(c.WorkerMCPAddr)), "/")
 	c.NabuWorkerMCPURL = env("NABU_WORKER_MCP_URL", c.WorkerMCPURL+"/mcp")
-	c.NabuTaskMCPURL = env("NABU_TASK_MCP_URL", c.InternalURL+"/mcp")
-	c.AgentRunnerURL = strings.TrimRight(env("AGENT_RUNNER_URL", c.AgentAddr), "/")
 	c.PublicWebURL = strings.TrimRight(env("PUBLIC_WEB_URL", c.PublicURL), "/")
 	c.PublicAPIURL = strings.TrimRight(env("PUBLIC_API_URL", c.PublicURL), "/")
 	for _, o := range splitList(env("CORS_ALLOWED_ORIGINS", ""), ",") {
@@ -334,9 +293,6 @@ func Load() (*Config, error) {
 	}
 	c.CookieDomain = strings.TrimPrefix(env("COOKIE_DOMAIN", ""), ".")
 	c.HooksURL = strings.TrimRight(env("HOOKS_URL", c.PublicAPIURL), "/")
-	if c.RunnerExecutor != "k8s" && c.RunnerExecutor != "local" {
-		return nil, fmt.Errorf("RUNNER_EXECUTOR must be k8s or local, got %q", c.RunnerExecutor)
-	}
 	return c, nil
 }
 
@@ -382,8 +338,6 @@ func (c *Config) Validate(mode string) error {
 	if mode == "api" {
 		need("WEBHOOK_SECRET", c.WebhookSecret)
 	}
-	// AGENT_SERVICE_TOKEN is optional since FTR.HMR.CMN-0006: without it and
-	// without NABU_URL Hammurapi works without the agent (R9).
 	need("S3_ENDPOINT", c.S3Endpoint)
 	switch c.AuthProvider {
 	case "":
@@ -400,10 +354,10 @@ func (c *Config) Validate(mode string) error {
 	default:
 		return fmt.Errorf("AUTH_PROVIDER must be empty, github or oidc, got %q", c.AuthProvider)
 	}
-	if c.NabuURL != "" {
-		need("NABU_CLIENT_ID", c.NabuClientID)
-		need("NABU_CLIENT_SECRET", c.NabuClientSecret)
-	}
+	// FTR.HMR.CMN-0007 R1: Hammurapi works only with Nabu.
+	need("NABU_URL", c.NabuURL)
+	need("NABU_CLIENT_ID", c.NabuClientID)
+	need("NABU_CLIENT_SECRET", c.NabuClientSecret)
 	return missingErr(missing)
 }
 
@@ -423,6 +377,16 @@ func decodeKey(s string) ([]byte, error) {
 		return b, nil
 	}
 	return nil, fmt.Errorf("TOKEN_ENCRYPTION_KEY must be 32 bytes encoded as base64 or hex")
+}
+
+// renamed is the variable to read: the old name while only it is set, with
+// a warning (FTR.HMR.CMN-0007 tech §10: the old names are read for one release).
+func renamed(name, old string) string {
+	if os.Getenv(name) == "" && os.Getenv(old) != "" {
+		slog.Warn("config: "+old+" is renamed to "+name+"; the old name is read for one release", "variable", old)
+		return old
+	}
+	return name
 }
 
 func env(name, def string) string {
@@ -498,7 +462,3 @@ func splitList(s, sep string) []string {
 	}
 	return out
 }
-
-// AgentEnabled reports whether Hammurapi has an agent: Nabu or, until the
-// transfer, the built-in operator (FTR.HMR.CMN-0006 R9).
-func (c *Config) AgentEnabled() bool { return c.NabuURL != "" || c.AgentServiceToken != "" }

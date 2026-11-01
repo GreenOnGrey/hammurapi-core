@@ -2,38 +2,41 @@ package codegen
 
 import (
 	"context"
-	"crypto/rand"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/GreenOnGrey/hammurapi-core/internal/apperr"
 	"github.com/GreenOnGrey/hammurapi-core/internal/cycledata"
-	"github.com/GreenOnGrey/hammurapi-core/internal/domain"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/workflows"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/events"
-	"github.com/GreenOnGrey/hammurapi-core/internal/platform/executor"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/metrics"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/postgres"
 )
 
 // Task workflow kind and effects.
 const (
-	TaskKind       = "codegen_task"
-	EffectStart    = "runner.start"
-	EffectStop     = "runner.stop"
+	TaskKind = "codegen_task"
+	// FTR.HMR.CMN-0007 tech §7.1: code tasks run in the sandbox of Nabu.
+	EffectStart    = "code.start"
+	EffectStop     = "code.cancel"
+	EffectPoll     = "code.poll"
+	EffectApply    = "code.apply"
 	TaskImplement  = "implement"
 	TaskReview     = "address_review"
 	TaskUpdatePR   = "update_pr"
 	TaskRevert     = "revert"
 	TaskCISetup    = "ci_setup"
-	startingWindow = 10 * time.Minute
+	startingWindow = 20 * time.Minute // code.start uploads the working copy
+	// pollEvery is how often a running task asks Nabu about its run; applyWindow
+	// bounds taking the changes and committing them (FTR.HMR.CMN-0007 tech §7.1).
+	pollEvery   = 30 * time.Second
+	applyWindow = 20 * time.Minute
 )
 
 // TaskInput is the input of a runner task (agent_tasks.input).
@@ -62,9 +65,6 @@ type TaskSpec struct {
 
 // StartTask creates an agent task and its codegen_task run.
 func StartTask(ctx context.Context, q postgres.Querier, s TaskSpec) (uuid.UUID, error) {
-	if domain.AgentDisabled() {
-		return uuid.Nil, apperr.AgentDisabled()
-	}
 	id := uuid.New()
 	runID, err := workflows.Start(ctx, q, TaskKind, id, s.Parent, "queued", map[string]any{"type": s.Type})
 	if err != nil {
@@ -76,19 +76,20 @@ func StartTask(ctx context.Context, q postgres.Querier, s TaskSpec) (uuid.UUID, 
 	if err := cycledata.New(q).InsertTask(ctx, t); err != nil {
 		return uuid.Nil, err
 	}
-	metrics.RunnerTasks.WithLabelValues(s.Type, "queued").Inc()
+	metrics.CodeTaskStates.WithLabelValues(s.Type, "queued").Inc()
 	return id, nil
 }
 
-// Limits of runner tasks (RUNNER_* settings).
+// Limits of code tasks (CODE_MAX_PARALLEL, CODE_TIMEOUT).
 type Limits struct {
 	MaxParallel int
-	Timeout     time.Duration
+	Timeout     time.Duration // 0 — no limit
 }
 
 // TaskMachine is the codegen_task workflow: queued → starting → running →
-// done · failed · cancelled. One task per service repository runs at a time
-// (unique index), and at most MaxParallel tasks overall.
+// applying → done · failed · cancelled (FTR.HMR.CMN-0007 tech §7.1). running
+// polls the run of Nabu every 30 s. One task per service repository runs at a
+// time (unique index), and at most MaxParallel tasks overall.
 type TaskMachine struct{ Limits Limits }
 
 // Kind implements workflows.Machine.
@@ -112,9 +113,9 @@ func (m TaskMachine) finish(ctx context.Context, tx pgx.Tx, run *workflows.Run, 
 		}
 	}
 	t.Status = status
-	metrics.RunnerTasks.WithLabelValues(t.Type, status).Inc()
+	metrics.CodeTaskStates.WithLabelValues(t.Type, status).Inc()
 	if t.StartedAt != nil {
-		metrics.RunnerTaskDuration.WithLabelValues(t.Type).Observe(time.Since(*t.StartedAt).Seconds())
+		metrics.CodeTaskDuration.WithLabelValues(t.Type).Observe(time.Since(*t.StartedAt).Seconds())
 	}
 	if run.ParentID != nil {
 		typ := "task_done"
@@ -144,7 +145,7 @@ func (m TaskMachine) Step(ctx context.Context, tx pgx.Tx, run *workflows.Run, ev
 	}
 	if workflows.Has(evs, "cancel") && run.State != "done" {
 		res, err := m.finish(ctx, tx, run, t, "cancelled", "cancelled")
-		if err == nil && t.ExecutorRef != nil {
+		if err == nil && run.State != "queued" {
 			res.Effects = []workflows.Effect{{Type: EffectStop, Payload: map[string]any{"taskId": t.ID, "reason": "cancelled"}}}
 		}
 		return res, err
@@ -171,19 +172,15 @@ func (m TaskMachine) Step(ctx context.Context, tx pgx.Tx, run *workflows.Run, ev
 			Effects: []workflows.Effect{{Type: EffectStart, Payload: map[string]any{"taskId": t.ID}}}, Notify: taskNotify(t)}, nil
 	case "starting":
 		if workflows.Has(evs, "started") {
-			timeout := m.Limits.Timeout
-			if timeout <= 0 {
-				timeout = 2 * time.Hour
-			}
 			t.Status = "running"
-			return workflows.Result{State: "running", Context: run.Context, NextRunAt: workflows.At(now.Add(timeout + 5*time.Minute)), Notify: taskNotify(t)}, nil
+			return workflows.Result{State: "running", Context: run.Context, NextRunAt: workflows.At(now.Add(pollEvery)), Notify: taskNotify(t)}, nil
 		}
 		if ev, ok := workflows.Find(evs, "effect_failed"); ok {
 			var f struct{ Error string }
 			_ = ev.Decode(&f)
 			return m.finish(ctx, tx, run, t, "failed", "the task could not start: "+f.Error)
 		}
-		if ev, ok := workflows.Find(evs, "task_result"); ok { // a fast task may report before "started"
+		if ev, ok := workflows.Find(evs, "task_result"); ok { // done without an agent or refused at once
 			return m.result(ctx, tx, run, t, ev)
 		}
 		if len(evs) == 0 && run.NextRunAt != nil && !now.Before(*run.NextRunAt) {
@@ -191,16 +188,38 @@ func (m TaskMachine) Step(ctx context.Context, tx pgx.Tx, run *workflows.Run, ev
 		}
 		return workflows.Result{State: run.State, Context: run.Context, NextRunAt: run.NextRunAt}, nil
 	case "running":
+		if ev, ok := workflows.Find(evs, "run_finished"); ok {
+			return workflows.Result{State: "applying", Context: run.Context, NextRunAt: workflows.At(now.Add(applyWindow)),
+				Effects: []workflows.Effect{{Type: EffectApply, Payload: json.RawMessage(ev.Payload)}}}, nil
+		}
 		if ev, ok := workflows.Find(evs, "task_result"); ok {
 			return m.result(ctx, tx, run, t, ev)
 		}
 		if len(evs) == 0 && run.NextRunAt != nil && !now.Before(*run.NextRunAt) {
-			// RUN-03: RUNNER_TIMEOUT exceeded.
-			res, err := m.finish(ctx, tx, run, t, "failed", "the task exceeded RUNNER_TIMEOUT")
-			if err == nil {
-				res.Effects = []workflows.Effect{{Type: EffectStop, Payload: map[string]any{"taskId": t.ID, "reason": "timeout"}}}
+			if t.StartedAt != nil && m.Limits.Timeout > 0 && now.After(t.StartedAt.Add(m.Limits.Timeout+5*time.Minute)) {
+				// RUN-03: CODE_TIMEOUT exceeded.
+				res, err := m.finish(ctx, tx, run, t, "failed", "the task exceeded CODE_TIMEOUT")
+				if err == nil {
+					_, _ = tx.Exec(ctx, `UPDATE agent_tasks SET error_class = 'limit' WHERE id = $1`, t.ID)
+					res.Effects = []workflows.Effect{{Type: EffectStop, Payload: map[string]any{"taskId": t.ID, "reason": "timeout"}}}
+				}
+				return res, err
 			}
-			return res, err
+			return workflows.Result{State: run.State, Context: run.Context, NextRunAt: workflows.At(now.Add(pollEvery)),
+				Effects: []workflows.Effect{{Type: EffectPoll, Payload: map[string]any{"taskId": t.ID}}}}, nil
+		}
+		return workflows.Result{State: run.State, Context: run.Context, NextRunAt: run.NextRunAt}, nil
+	case "applying":
+		if ev, ok := workflows.Find(evs, "task_result"); ok {
+			return m.result(ctx, tx, run, t, ev)
+		}
+		if ev, ok := workflows.Find(evs, "effect_failed"); ok {
+			var f struct{ Error string }
+			_ = ev.Decode(&f)
+			return m.finish(ctx, tx, run, t, "failed", "the changes could not be applied: "+f.Error)
+		}
+		if len(evs) == 0 && run.NextRunAt != nil && !now.Before(*run.NextRunAt) {
+			return m.finish(ctx, tx, run, t, "failed", "the changes were not applied in time")
 		}
 		return workflows.Result{State: run.State, Context: run.Context, NextRunAt: run.NextRunAt}, nil
 	}
@@ -226,20 +245,16 @@ func (m TaskMachine) result(ctx context.Context, tx pgx.Tx, run *workflows.Run, 
 	return m.finish(ctx, tx, run, t, "failed", r.Error)
 }
 
-// ─── Runner effects ─────────────────────────────────────────────────
+// ─── Task tokens ─────────────────────────────────────────────────────
 
-// RunnerEffects start and stop runner processes (worker).
-type RunnerEffects struct {
-	Q           postgres.Querier
-	Executor    executor.Executor
-	InternalURL string
-}
-
-// NewToken returns a one-time task token and its hash.
-func NewToken() (string, []byte) {
-	b := make([]byte, 32)
-	_, _ = rand.Read(b)
-	tok := "hmt_" + hex.EncodeToString(b)
+// TaskToken returns the token of a task and its hash. It is derived from
+// the key and the task, so a repeat of code.start gives the same token as
+// the run Nabu returns by the idempotency key (CT-17); the hash is cleared
+// when the task ends, which revokes it.
+func TaskToken(key []byte, task uuid.UUID) (string, []byte) {
+	m := hmac.New(sha256.New, key)
+	m.Write([]byte("hammurapi:task-token:" + task.String()))
+	tok := "hmt_" + hex.EncodeToString(m.Sum(nil))
 	return tok, HashToken(tok)
 }
 
@@ -247,61 +262,4 @@ func NewToken() (string, []byte) {
 func HashToken(tok string) []byte {
 	h := sha256.Sum256([]byte(tok))
 	return h[:]
-}
-
-// Start implements runner.start.
-func (e *RunnerEffects) Start(ctx context.Context, run workflows.RunRef, payload json.RawMessage) ([]workflows.NewEvent, error) {
-	var in struct {
-		TaskID uuid.UUID `json:"taskId"`
-	}
-	if err := json.Unmarshal(payload, &in); err != nil {
-		return nil, err
-	}
-	cd := cycledata.New(e.Q)
-	t, err := cd.TaskByID(ctx, in.TaskID)
-	if err != nil {
-		return nil, err
-	}
-	if t.Status != "queued" && t.Status != "running" {
-		return nil, nil // cancelled meanwhile
-	}
-	tok, hash := NewToken()
-	if err := cd.StartTask(ctx, t.ID, hash, ""); err != nil {
-		if postgres.IsUniqueViolation(err) {
-			return nil, fmt.Errorf("another task runs in service %s", t.Service)
-		}
-		return nil, err
-	}
-	ref, err := e.Executor.Start(ctx, executor.Task{ID: t.ID.String(), Token: tok, InternalURL: e.InternalURL})
-	if err != nil {
-		_, _ = e.Q.Exec(ctx, `UPDATE agent_tasks SET status = 'queued', token_hash = NULL, started_at = NULL WHERE id = $1`, t.ID)
-		return nil, err
-	}
-	if _, err := e.Q.Exec(ctx, `UPDATE agent_tasks SET executor_ref = $2 WHERE id = $1`, t.ID, ref); err != nil {
-		return nil, err
-	}
-	metrics.RunnerTasks.WithLabelValues(t.Type, "running").Inc()
-	return []workflows.NewEvent{{Type: "started", Payload: map[string]string{"ref": ref}}}, nil
-}
-
-// Stop implements runner.stop.
-func (e *RunnerEffects) Stop(ctx context.Context, run workflows.RunRef, payload json.RawMessage) ([]workflows.NewEvent, error) {
-	var in struct {
-		TaskID uuid.UUID `json:"taskId"`
-		Reason string    `json:"reason"`
-	}
-	if err := json.Unmarshal(payload, &in); err != nil {
-		return nil, err
-	}
-	t, err := cycledata.New(e.Q).TaskByID(ctx, in.TaskID)
-	if err != nil {
-		return nil, err
-	}
-	if t.ExecutorRef != nil && *t.ExecutorRef != "" {
-		if err := e.Executor.Stop(ctx, *t.ExecutorRef); err != nil && !errors.Is(err, executor.ErrNotFound) {
-			return nil, err
-		}
-	}
-	_, err = e.Q.Exec(ctx, `UPDATE agent_tasks SET token_hash = NULL WHERE id = $1`, t.ID)
-	return nil, err
 }

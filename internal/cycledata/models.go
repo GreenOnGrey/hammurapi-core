@@ -214,6 +214,9 @@ type Task struct {
 	CreatedAt   time.Time       `json:"createdAt"`
 	StartedAt   *time.Time      `json:"startedAt"`
 	FinishedAt  *time.Time      `json:"finishedAt"`
+	// FTR.HMR.CMN-0007 R11: the class of the error and the run of Nabu.
+	ErrorClass *string `json:"errorClass"`
+	NabuRunID  *string `json:"nabuRunId"`
 }
 
 // Release is a release (RLS).

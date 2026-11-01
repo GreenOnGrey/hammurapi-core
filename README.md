@@ -8,10 +8,8 @@ One Go binary, several modes:
 
 | Mode | Purpose | Kubernetes |
 | --- | --- | --- |
-| `api` | User/admin HTTP API, SSE, webhooks, chat with the agent, internal MCP endpoint | Deployment |
-| `worker` | Kafka consumer, workflows, agent scenarios through the operator, MCP of task sessions (`:8083`) | Deployment |
-| `agent` | Agent operator: a Pi process (`pi --mode rpc`) per chat or task session (`:8090`) | Deployment |
-| `runner` | One code task: checkout, workspace server for Pi's tools (`:8095`), commit and PR | Job |
+| `api` | User/admin HTTP API, SSE, webhooks, the chat proxied to Nabu, `/mcp/nabu` | Deployment |
+| `worker` | Kafka consumer, workflows, runs of the service agents of Nabu and code tasks, MCP of runs (`:8083`) | Deployment |
 | `cleaner` | Expired attachments, sessions, locks, unconfirmed imports, pending branch deletions | CronJob |
 | `migrate` | goose migrations (embedded) | Job / Helm hook |
 
@@ -22,16 +20,13 @@ Deployment (docker-compose, Helm, installer) and documentation live in the
 
 ```text
 cmd/hammurapi/        entry point: mode selection and wiring
-cmd/fakellm/          scripted OpenAI-compatible LLM for the demo and smoke runs (not for production)
-pkg/pirpc/            client of Pi's RPC mode (JSONL over stdin/stdout)
-pi-extensions/        hammurapi-workspace: Pi's file and shell tools over the runner workspace server
 migrations/           goose SQL, embedded into the binary
 internal/app/         dependency assembly and routing per mode
 internal/features/    vertical slices: auth, profile, domains, features, gates, approvals,
                       handoff, rules, agent, voice, attachments, imports, admin, feedback, webhooks
 internal/specdata/    shared projection of features, gates, history and locks
-internal/platform/    adapters: postgres, kafka, git (GitHub + GitLab), agent (operator, Pi adapter,
-                      client, LLM error classes, fakellm), mcp, storage (S3),
+internal/platform/    adapters: postgres, kafka, git (GitHub + GitLab), agent (scenarios, LLM error
+                      classes), nabu (client of Nabu), mcp, storage (S3),
                       whisper, events (NOTIFY → SSE), crypto, logging, telemetry, metrics, httpx
 internal/jobs/cleaner the cleaner mode
 ```
@@ -49,20 +44,19 @@ internal/jobs/cleaner the cleaner mode
   latest commit of the gate folder and refuses if the projection has not seen it yet.
 - **Events** are published with `pg_notify`; every `api` pod listens and fans them out over one SSE
   stream per browser. Agent tokens go straight to the local SSE stream (sticky sessions).
-- **Agent (FTR.HMR.CMN-0004):** Pi runs in the agent operator (mode `agent`), one process per session.
-  `api` and `worker` resolve the scenario's LLM connection, model, skills and MCP servers
-  (`internal/features/agentcfg`, Admin → Agent) and open sessions over HTTP with
-  `AGENT_SERVICE_TOKEN`; runner tasks open their own with a task token. Hammurapi tools are an MCP
-  server with a grant per session (chat, scenario, task). LLM errors are classified and shown in
-  plain words; usage and cost are recorded per scenario. There is no delete tool.
+- **Agent (FTR.HMR.CMN-0007):** the agent lives in Nabu; Hammurapi requires `NABU_URL`. Scenarios
+  are runs of service agents of Nabu; code tasks upload a working copy of the branch to Nabu, the
+  agent works in a sandbox there, and the worker commits the changes as the bot and opens the PR.
+  Hammurapi tools are an MCP server with a grant per run. LLM errors are classified and shown in
+  plain words; usage is recorded per scenario. There is no delete tool.
 
 ## Development
 
 Requires Go 1.27. Docker is needed only for integration tests and images.
 
 ```sh
-make build            # bin/hammurapi, bin/fakellm
-make test             # unit tests (mockgen mocks, fake Pi over RPC, httptest providers)
+make build            # bin/hammurapi
+make test             # unit tests (mockgen mocks, httptest providers)
 make test-integration # + Postgres via dockertest v4
 make generate         # regenerate mocks (go tool mockgen)
 make image            # docker image hammurapi:<version>
@@ -91,15 +85,13 @@ cookies). All default to a single origin.
 ## Release
 
 A tag `vX.Y.Z` runs `.github/workflows/release.yml`: lint (golangci-lint) ∥ tests → image
-`ghcr.io/greenongrey/hammurapi-core` (target `release` of the `Dockerfile`: Hammurapi + Pi
-`@earendil-works/pi-coding-agent` + the `hammurapi-workspace` extension, SBOM, provenance, cosign
+`ghcr.io/greenongrey/hammurapi-core` (target `release` of the `Dockerfile`: the static binary on distroless, SBOM, provenance, cosign
 signature) → Trivy scan
 (CRITICAL/HIGH with a fix block the deploy) → deploy through the reusable workflow of
 `hammurapi` (`.github/workflows/deploy-component.yml`). A manual run with a tag redeploys the signed image without a rebuild; with
 `run_id` and `callback_url` it follows the FTR.HMR.CMN-0002 deploy contract.
 
-Versions are pinned in `deploy/versions.env` (`DEPLOY_WORKFLOW_REF`, `CHART_VERSION`,
-`PI_VERSION`) and change by PR; after changing `DEPLOY_WORKFLOW_REF` run
+Versions are pinned in `deploy/versions.env` (`DEPLOY_WORKFLOW_REF`, `CHART_VERSION`) and change by PR; after changing `DEPLOY_WORKFLOW_REF` run
 `deploy/sync-ref.sh` (CI checks it). Setup: `hammurapi-infra/docs/hammurapi.md`.
 
 ## API

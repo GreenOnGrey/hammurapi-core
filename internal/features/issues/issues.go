@@ -131,9 +131,6 @@ func (s *Service) Create(ctx context.Context, p *domain.Principal, in CreateInpu
 	if err != nil {
 		return nil, err
 	}
-	if domain.AgentDisabled() {
-		created.Status = domain.IssueVerification
-	}
 	s.publish(ctx, created.Key, created.Status)
 	return created, nil
 }
@@ -226,7 +223,7 @@ func (s *Service) Get(ctx context.Context, p *domain.Principal, key string) (*Ca
 	c.Permissions = Permissions{
 		Verify: expert && is.Status == domain.IssueVerification,
 		Reopen: expert && is.Status == domain.IssueRejected,
-		Discover: expert && !domain.AgentDisabled() && (is.Status == domain.IssueNew || is.Status == domain.IssueDiscovery ||
+		Discover: expert && (is.Status == domain.IssueNew || is.Status == domain.IssueDiscovery ||
 			// FTR.HMR.DISC-0001 R13: a failed revision leaves the issue in verification with «Retry»
 			is.Status == domain.IssueVerification && discovery.Blocked(ctx, s.store.Q(), is.ID)),
 	}
@@ -430,9 +427,6 @@ func (s *Service) Reopen(ctx context.Context, p *domain.Principal, key string) e
 
 // Rediscover restarts Discovery (after a failure or to refresh it).
 func (s *Service) Rediscover(ctx context.Context, p *domain.Principal, key string) error {
-	if domain.AgentDisabled() {
-		return apperr.AgentDisabled()
-	}
 	is, err := s.loadForAction(ctx, p, key)
 	if err != nil {
 		return err

@@ -35,6 +35,15 @@ type Client struct {
 	mu      sync.Mutex
 	token   string
 	expires time.Time
+	lastOK  time.Time
+}
+
+// LastOK is when Nabu last answered this process without a 5xx; zero — not
+// yet (FTR.HMR.CMN-0007 tech §6: lastOkAt).
+func (c *Client) LastOK() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.lastOK
 }
 
 // New creates a client; it is nil when Nabu is not configured.
@@ -116,11 +125,14 @@ func (c *Client) Request(ctx context.Context, method, path, onBehalf string, bod
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}
+	c.mu.Lock()
 	if resp.StatusCode == http.StatusUnauthorized {
-		c.mu.Lock()
 		c.token = ""
-		c.mu.Unlock()
 	}
+	if resp.StatusCode < 500 {
+		c.lastOK = time.Now()
+	}
+	c.mu.Unlock()
 	return resp, nil
 }
 
@@ -155,8 +167,8 @@ func Decode(resp *http.Response, out any) error {
 			} `json:"error"`
 		}
 		_ = json.Unmarshal(b, &e)
-		if resp.StatusCode >= 500 && e.Error.Code == "" {
-			return fmt.Errorf("%w: %d", ErrUnavailable, resp.StatusCode)
+		if resp.StatusCode >= 500 { // retried, whatever the code (R2, R11)
+			return fmt.Errorf("%w: %d %s %s", ErrUnavailable, resp.StatusCode, e.Error.Code, e.Error.Message)
 		}
 		return &APIError{Status: resp.StatusCode, Code: e.Error.Code, Message: e.Error.Message, Details: e.Error.Details}
 	}
@@ -173,6 +185,9 @@ type Agent struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Workspace   string `json:"workspace"`
+	// FTR.HMR.CMN-0007 tech §3.3: the sandbox of a code agent.
+	WorkspaceProfile string   `json:"workspaceProfile"`
+	Proxies          []string `json:"proxies"`
 }
 
 // Agents lists the service agents allowed to Hammurapi.
@@ -198,16 +213,15 @@ type RunInput struct {
 	CallerMCP      []CallerMCP     `json:"callerMcp,omitempty"`
 	Initiator      string          `json:"initiator,omitempty"`
 	IdempotencyKey string          `json:"idempotencyKey,omitempty"`
+	// Files is the upload with the working copy (FTR.HMR.CMN-0007 tech §2.2).
+	Files string `json:"files,omitempty"`
 }
 
 // Started is the answer of a run start.
 type Started struct {
-	RunID          string `json:"runId"`
-	WorkspaceToken string `json:"workspaceToken,omitempty"`
-	WorkspaceID    string `json:"workspaceId,omitempty"`
-	RelayURL       string `json:"relayUrl,omitempty"`
-	EventsURL      string `json:"eventsUrl"`
-	EventsToken    string `json:"eventsToken"`
+	RunID       string `json:"runId"`
+	EventsURL   string `json:"eventsUrl"`
+	EventsToken string `json:"eventsToken"`
 }
 
 // StartRun starts a run of a service agent.
@@ -215,6 +229,60 @@ func (c *Client) StartRun(ctx context.Context, agent string, in RunInput) (*Star
 	var out Started
 	err := c.Do(ctx, http.MethodPost, "/client/v1/agents/"+url.PathEscape(agent)+"/runs", "", in, &out)
 	return &out, err
+}
+
+// Upload is the answer of PUT /client/v1/uploads/{id}.
+type Upload struct {
+	ID    string `json:"id"`
+	Files int    `json:"files"`
+	Bytes int64  `json:"bytes"`
+}
+
+// UploadFiles streams the tar.gz of a working copy (FTR.HMR.CMN-0007 tech
+// §2.1). A copy over the limits is *APIError workspace_too_large with the
+// counts in Details.
+func (c *Client) UploadFiles(ctx context.Context, id string, body io.Reader) (*Upload, error) {
+	resp, err := c.Request(ctx, http.MethodPut, "/client/v1/uploads/"+url.PathEscape(id), "", body, "application/gzip")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var out Upload
+	return &out, Decode(resp, &out)
+}
+
+// Run is the state of a run (GET /client/v1/runs/{id}).
+type Run struct {
+	ID         string          `json:"id"`
+	Agent      string          `json:"agent"`
+	Status     string          `json:"status"` // queued | running | succeeded | failed | cancelled
+	Summary    *string         `json:"summary"`
+	ErrorClass *string         `json:"errorClass"`
+	ErrorText  *string         `json:"errorText"`
+	Usage      json.RawMessage `json:"usage"`
+	Changes    *struct {
+		Files int `json:"files"`
+	} `json:"changes"`
+}
+
+// GetRun reads a run.
+func (c *Client) GetRun(ctx context.Context, runID string) (*Run, error) {
+	var out Run
+	err := c.Do(ctx, http.MethodGet, "/client/v1/runs/"+url.PathEscape(runID), "", nil, &out)
+	return &out, err
+}
+
+// Changes opens the archive of changes of a finished run (tech §2.3).
+func (c *Client) Changes(ctx context.Context, runID string) (io.ReadCloser, error) {
+	resp, err := c.Request(ctx, http.MethodGet, "/client/v1/runs/"+url.PathEscape(runID)+"/changes", "", nil, "")
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode/100 != 2 {
+		defer resp.Body.Close()
+		return nil, Decode(resp, nil)
+	}
+	return resp.Body, nil
 }
 
 // CancelRun cancels a run.
@@ -300,13 +368,6 @@ func readEventsOnce(ctx context.Context, eventsURL, token string, last *int, onE
 		}
 	}
 	return false, sc.Err()
-}
-
-// Import sends the agent settings of Hammurapi to Nabu (R11, tech §4).
-func (c *Client) Import(ctx context.Context, body any) (map[string]any, error) {
-	var out map[string]any
-	err := c.Do(ctx, http.MethodPost, "/client/v1/import/hammurapi-agent", "", body, &out)
-	return out, err
 }
 
 // Conversation is a conversation of a user in Nabu.

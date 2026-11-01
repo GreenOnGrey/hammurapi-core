@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -26,7 +24,6 @@ import (
 	"github.com/GreenOnGrey/hammurapi-core/internal/domain"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/admin"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/agent"
-	"github.com/GreenOnGrey/hammurapi-core/internal/features/agentcfg"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/agentrun"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/approvals"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/attachments"
@@ -52,20 +49,17 @@ import (
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/releases"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/rollback"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/rules"
-	"github.com/GreenOnGrey/hammurapi-core/internal/features/runner"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/services"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/specindex"
+	"github.com/GreenOnGrey/hammurapi-core/internal/features/usage"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/validation"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/voice"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/webhooks"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/workflows"
 	"github.com/GreenOnGrey/hammurapi-core/internal/jobs/cleaner"
-	agentapi "github.com/GreenOnGrey/hammurapi-core/internal/platform/agent"
-	"github.com/GreenOnGrey/hammurapi-core/internal/platform/agent/operator"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/cicd"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/crypto"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/events"
-	"github.com/GreenOnGrey/hammurapi-core/internal/platform/executor"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/git"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/httpx"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/kafka"
@@ -125,7 +119,6 @@ func newCore(ctx context.Context, cfg *config.Config) (*core, error) {
 	authRepo := auth.NewRepository(pool)
 	authSvc := auth.NewService(authRepo, provider, box, cfg.PublicAPIURL, cfg.BootstrapAdmins, cfg.DefaultLanguage)
 	authSvc.SetLogin(loginProvider(cfg, provider), gitAPIURL(cfg))
-	domain.SetAgentDisabled(!cfg.AgentEnabled())
 	return &core{
 		cfg: cfg, pool: pool, provider: provider, authRepo: authRepo, authSvc: authSvc,
 		store: specdata.NewPG(pool), s3: s3, events: events.NewPGPublisher(pool), secrets: signing.NewSecrets(box), box: box,
@@ -324,9 +317,6 @@ func RunAPI(ctx context.Context, cfg *config.Config) error {
 	if err := kafka.EnsureTopics(ctx, cfg.KafkaBrokers, kafka.TopicGitPush, kafka.TopicImports); err != nil {
 		slog.Warn("could not ensure kafka topics (auto-creation will be used)", "err", err)
 	}
-	if cfg.RunnerExecutor == "local" {
-		slog.Warn("RUNNER_EXECUTOR=local runs agent tasks as subprocesses of the worker without network isolation; it is meant for development and demos, not for production")
-	}
 	producer := kafka.NewProducer(cfg.KafkaBrokers)
 	defer producer.Close()
 
@@ -344,7 +334,6 @@ func RunAPI(ctx context.Context, cfg *config.Config) error {
 	profileSvc := profile.NewService(c.pool)
 	adminSvc := admin.NewService(c.pool).WithIdentities(c.authRepo)
 	nabuSvc := c.nabuService()
-	adminSvc.RunnerExecutor = cfg.RunnerExecutor
 	rulesSvc := rules.NewService(c.pool, c.provider, tokens, branch)
 	attSvc := attachments.NewService(c.pool, c.s3, cfg.UploadMaxBytes, cfg.UploadAllowedTypes)
 	importSvc := imports.NewService(c.pool, c.store, c.s3, producer, c.provider, tokens, c.events, rulesSvc, loadPrincipal, imports.Config{
@@ -361,21 +350,6 @@ func RunAPI(ctx context.Context, cfg *config.Config) error {
 	deployAdmin := &deploy.Admin{Pool: c.pool, Secrets: c.secrets, Effects: deployEffects}
 	flagHook := &flags.Hook{Pool: c.pool, Secrets: c.secrets, Events: c.events}
 
-	// The agent operator (FTR.HMR.CMN-0004): the chat and the runner API open Pi
-	// sessions there; the Agent section configures them.
-	operatorClient := &agentapi.Client{BaseURL: cfg.AgentAddr, Token: cfg.AgentServiceToken}
-	agentCfg := agentcfg.NewService(c.pool, c.box, operatorClient, c.events, c.s3, c.provider, tokens, branch)
-	if err := agentCfg.Bootstrap(ctx, cfg.BootstrapDeepSeekKey, cfg.BootstrapDeepSeekURL); err != nil {
-		slog.Error("agent bootstrap failed", "err", err)
-	}
-	overviewSvc.AgentFocus = func(ctx context.Context) ([]overview.Item, error) {
-		items, err := agentCfg.Focus(ctx)
-		out := make([]overview.Item, 0, len(items))
-		for _, it := range items {
-			out = append(out, overview.Item{Kind: it.Kind, Key: it.Key, Title: it.Title, Action: it.Action, WaitingSince: it.WaitingSince, Hint: it.Hint})
-		}
-		return out, err
-	}
 	overviewSvc.SpecFocus = func(ctx context.Context) ([]overview.Item, error) {
 		items, err := sl.spec.Focus(ctx)
 		out := make([]overview.Item, 0, len(items))
@@ -386,19 +360,7 @@ func RunAPI(ctx context.Context, cfg *config.Config) error {
 	}
 	mcpServer := mcp.NewServer()
 	mcpServer.Register(sl.spec.Tools()...) // spec_* in every scenario (FTR.HMR.CMN-0005 R18)
-	chatSvc := agent.NewService(agent.NewRepository(c.pool), c.store, operatorClient, agentCfg, mcpServer, cfg.InternalURL+"/mcp", hub, attSvc, c.s3, loadPrincipal)
-	chatSvc.IdleTimeout = cfg.AgentIdleTimeout
 	mcpServer.Register(agent.Tools(c.toolDeps(sl, loadPrincipal))...)
-	profileSvc.OnAgentChanged = chatSvc.ResetPersona
-
-	internal := &runner.Internal{Pool: c.pool, Store: c.store, Git: c.provider, Events: c.events, MCP: mcpServer, GitBaseURL: cfg.GitBaseURL,
-		PublicURL: cfg.InternalURL, Timeout: cfg.RunnerTimeout, TokenLimit: cfg.RunnerTokenLimit,
-		Config: agentCfg, AgentURL: cfg.AgentRunnerURL,
-		Nabu: nabuSvc.Client, NabuBindings: nabuSvc, NabuMCPURL: cfg.NabuTaskMCPURL, UserEmail: c.authRepo.UserEmail}
-	if cfg.AgentServiceToken != "" {
-		internal.Operator = operatorClient // the built-in agent (FTR.HMR.CMN-0004) until the transfer
-	}
-	mcpServer.Resolve = internal.ResolveMCP
 
 	var nabuChat *nabuconn.Chat
 	nabuMCP := &nabuconn.MCPHandler{Server: mcpServer, EnsureUser: c.authSvc.EnsureDelegated}
@@ -421,7 +383,7 @@ func RunAPI(ctx context.Context, cfg *config.Config) error {
 		ImportMaxBytes: cfg.ImportMaxBytes, Languages: domain.Languages, DefaultLanguage: cfg.DefaultLanguage, DefaultBranch: branch,
 		BootstrapAdminsConfigured: len(cfg.BootstrapAdmins) > 0,
 		Login:                     loginInfo(cfg, c.authSvc),
-		Agent:                     agentInfo(cfg),
+		NabuWebURL:                cfg.NabuWebURL,
 	}, strings.HasPrefix(cfg.PublicAPIURL, "https://")).WithWeb(webRedirectBase(cfg), cfg.CookieDomain)
 
 	r := chi.NewRouter()
@@ -451,8 +413,6 @@ func RunAPI(ctx context.Context, cfg *config.Config) error {
 			serviceSvc.Routes(r)
 			if nabuChat != nil {
 				nabuChat.Routes(r) // the chat is the personal agent in Nabu (R5)
-			} else if cfg.AgentServiceToken != "" {
-				chatSvc.Routes(r)
 			}
 			voice.Routes(r, whisper.New(cfg.WhisperURL))
 			attSvc.Routes(r)
@@ -476,7 +436,7 @@ func RunAPI(ctx context.Context, cfg *config.Config) error {
 		sl.metrics.AdminRoutes(r)
 		deployAdmin.Routes(r)
 		flagHook.AdminRoutes(r)
-		agentCfg.Routes(r) // global administrators only
+		(&usage.Service{Pool: c.pool}).Routes(r) // the history of usage (FTR.HMR.CMN-0007 R3), global administrators only
 		nabuSvc.AdminRoutes(r)
 		sl.spec.AdminRoutes(r)
 	})
@@ -488,19 +448,11 @@ func RunAPI(ctx context.Context, cfg *config.Config) error {
 		httpx.Error(w, r, apperr.NotFound("not_found", "not found"))
 	})
 
-	internalRouter := chi.NewRouter()
-	internalRouter.Handle("/mcp", mcpServer)
-	internal.Routes(internalRouter)
-
 	api := &http.Server{Addr: cfg.HTTPAddr, Handler: otelhttp.NewHandler(r, "http"), ReadHeaderTimeout: 15 * time.Second}
-	internalHTTP := &http.Server{Addr: cfg.InternalAddr, Handler: otelhttp.NewHandler(internalRouter, "internal"), ReadHeaderTimeout: 15 * time.Second}
-	svc := serviceServer(cfg.ServiceAddr, c.ready) // agent health is a metric, not readiness
+	svc := serviceServer(cfg.ServiceAddr, c.ready)
 
 	g, gctx := errgroup.WithContext(ctx)
-	serve(gctx, g, api, internalHTTP, svc)
-	if cfg.AgentServiceToken != "" {
-		g.Go(func() error { chatSvc.Run(gctx); return nil })
-	}
+	serve(gctx, g, api, svc)
 	return g.Wait()
 }
 
@@ -508,36 +460,6 @@ func RunAPI(ctx context.Context, cfg *config.Config) error {
 func loginInfo(cfg *config.Config, svc *auth.Service) auth.LoginInfo {
 	lp := svc.LoginProvider()
 	return auth.LoginInfo{Kind: lp.Kind(), Label: lp.Label(), Org: cfg.GitHubAllowedOrg, LinksGit: svc.GitIsLogin()}
-}
-
-// agentInfo is the agent block of /api/v1/config (tech §3.1).
-func agentInfo(cfg *config.Config) auth.AgentInfo {
-	switch {
-	case cfg.NabuURL != "":
-		return auth.AgentInfo{Enabled: true, Provider: "nabu"}
-	case cfg.AgentServiceToken != "":
-		return auth.AgentInfo{Enabled: true, Provider: "builtin"}
-	}
-	return auth.AgentInfo{Enabled: false}
-}
-
-// RunOperator serves the agent operator (FTR.HMR.CMN-0004 arch §3): the internal
-// API on listenAddr and health and metrics on serviceAddr.
-func RunOperator(ctx context.Context, op *operator.Operator, listenAddr, serviceAddr string, piCommand []string) error {
-	ready := func(context.Context) error {
-		if len(piCommand) == 0 {
-			return errors.New("PI_BINARY is empty")
-		}
-		if _, err := exec.LookPath(piCommand[0]); err != nil {
-			return fmt.Errorf("pi: %w", err)
-		}
-		return nil
-	}
-	srv := &http.Server{Addr: listenAddr, Handler: otelhttp.NewHandler(op.Handler(), "agent"), ReadHeaderTimeout: 15 * time.Second}
-	g, gctx := errgroup.WithContext(ctx)
-	serve(gctx, g, srv, serviceServer(serviceAddr, ready))
-	g.Go(func() error { op.Run(gctx); return nil })
-	return g.Wait()
 }
 
 func requireAnyAdmin(next http.Handler) http.Handler {
@@ -549,20 +471,6 @@ func requireAnyAdmin(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
-}
-
-// NewExecutor builds the runner executor.
-func NewExecutor(cfg *config.Config) (executor.Executor, error) {
-	if cfg.RunnerExecutor == "local" {
-		l := executor.NewLocal(cfg.RunnerWorkdir, cfg.RunnerTimeout+5*time.Minute, nil)
-		// The operator reaches the workspace servers of local tasks at the worker's host name.
-		if l.WorkspaceHost = os.Getenv("RUNNER_WORKSPACE_HOST"); l.WorkspaceHost == "" {
-			l.WorkspaceHost, _ = os.Hostname()
-		}
-		return l, nil
-	}
-	return executor.NewK8s(executor.K8sConfig{Namespace: cfg.RunnerNamespace, Image: cfg.RunnerImage, Timeout: cfg.RunnerTimeout,
-		CPU: cfg.RunnerCPU, Memory: cfg.RunnerMemory, WorkspacePort: cfg.RunnerWorkspacePort})
 }
 
 // RunWorker consumes webhook events and import jobs, runs the workflow engine
@@ -588,50 +496,41 @@ func RunWorker(ctx context.Context, cfg *config.Config) error {
 	})
 	proc := webhooks.NewProcessor(c.store, c.provider, c.events, sl.catalog, sl.codegen, cfg.BotLogin)
 
-	// Agent sessions of the worker (Analysis, generation, checks) run in the
-	// agent operator and reach the worker's own MCP endpoint (result sinks).
-	operatorClient := &agentapi.Client{BaseURL: cfg.AgentAddr, Token: cfg.AgentServiceToken}
-	agentCfg := agentcfg.NewService(c.pool, c.box, operatorClient, c.events, c.s3, c.provider, tokens, cfg.GitDefaultBranch)
-	proc.Skills = agentCfg // pushes to /agent/ rebuild the skills snapshot
-	proc.Specs = sl.spec   // pushes to the default branch update the specification index
+	// Agent sessions of the worker (Analysis, generation, checks, code) are runs
+	// of the service agents of Nabu; they reach the worker's own MCP endpoint
+	// (result sinks, FTR.HMR.CMN-0007 R4).
+	proc.Specs = sl.spec // pushes to the default branch update the specification index
 	mcpServer := mcp.NewServer()
 	mcpServer.Register(sl.spec.Tools()...)
 	mcpServer.Register(agent.Tools(c.toolDeps(sl, loadPrincipal))...)
-	agents := &agentrun.Runner{Config: agentCfg, MCP: mcpServer, URL: cfg.WorkerMCPURL + "/mcp"}
-	if cfg.AgentServiceToken != "" {
-		// Without the token there is no built-in agent: unbound scenarios fail at
-		// once instead of retrying against an operator that is not there.
-		agents.Operator = operatorClient
-	}
-	if ns := c.nabuService(); ns.Enabled() {
-		agents.Nabu = &agentrun.NabuRuns{Client: ns.Client, Bindings: ns, CallerMCPURL: cfg.NabuWorkerMCPURL}
-	}
-
-	exec, err := NewExecutor(cfg)
-	if err != nil {
-		return err
-	}
+	ns := c.nabuService()
+	agents := &agentrun.Runner{MCP: mcpServer, Usage: &usage.Service{Pool: c.pool},
+		Nabu: &agentrun.NabuRuns{Client: ns.Client, Bindings: ns, CallerMCPURL: cfg.NabuWorkerMCPURL}}
+	// FTR.HMR.CMN-0007 R5: code tasks in the sandbox of Nabu; the task token is
+	// the MCP token of the run and outlives a restart of the worker.
+	code := &codegen.Code{Pool: c.pool, Store: c.store, Git: c.provider, Events: c.events, Nabu: ns.Client, Bindings: ns,
+		CallerMCPURL: cfg.NabuWorkerMCPURL, UserEmail: c.authRepo.UserEmail, Timeout: cfg.CodeTimeout, TokenKey: cfg.TokenEncryptionKey}
+	mcpServer.Resolve = code.ResolveMCP
 	engine := workflows.New(c.pool, c.events, workflows.Config{MaxAttempts: cfg.WorkflowMaxAttempts, Lease: cfg.WorkflowLease,
 		Dispatchers: cfg.WorkflowDispatchers})
 	engine.Register(discovery.Machine{}, gategen.Machine{}, codegen.Machine{StartValidation: validation.Start},
-		codegen.TaskMachine{Limits: codegen.Limits{MaxParallel: cfg.RunnerMaxParallel, Timeout: cfg.RunnerTimeout}},
+		codegen.TaskMachine{Limits: codegen.Limits{MaxParallel: cfg.CodeMaxParallel, Timeout: cfg.CodeTimeout}},
 		validation.Machine{}, releases.Machine{}, rollback.Machine{})
 	disc := &discovery.Effects{Q: c.pool, Runner: agents, Timeout: cfg.DiscoveryTimeout}
 	engine.Handle(discovery.Effect, workflows.EffectHandler{Lease: cfg.DiscoveryTimeout + time.Minute, Do: disc.Do})
 	// FTR.HMR.DISC-0001: the next run for waiting instructions and the notices of the result
 	engine.Handle(discovery.EffectDrain, workflows.EffectHandler{Do: (&discovery.DrainEffects{Q: c.pool}).Do})
 	notices := &discovery.NoticeEffects{Q: c.pool, Email: c.authRepo.UserEmail}
-	if ns := c.nabuService(); ns.Enabled() {
-		notices.Nabu = ns.Client
-	}
+	notices.Nabu = ns.Client
 	engine.Handle(discovery.EffectNotice, workflows.EffectHandler{Do: notices.Do})
 	gen := &gategen.Effects{Store: c.store, Git: c.provider, Tokens: tokens, Runner: agents, DefaultBranch: cfg.GitDefaultBranch, Timeout: 30 * time.Minute}
 	engine.Handle(gategen.Effect, workflows.EffectHandler{Lease: 31 * time.Minute, Do: gen.Do})
 	check := &validation.Effects{Store: c.store, Git: c.provider, Runner: agents}
 	engine.Handle(validation.EffectCheck, workflows.EffectHandler{Lease: 30 * time.Minute, Do: check.Check})
-	run := &codegen.RunnerEffects{Q: c.pool, Executor: exec, InternalURL: cfg.InternalURL}
-	engine.Handle(codegen.EffectStart, workflows.EffectHandler{Lease: 5 * time.Minute, Do: run.Start})
-	engine.Handle(codegen.EffectStop, workflows.EffectHandler{Do: run.Stop})
+	engine.Handle(codegen.EffectStart, workflows.EffectHandler{Lease: 15 * time.Minute, Do: code.Start})
+	engine.Handle(codegen.EffectPoll, workflows.EffectHandler{Do: code.Poll})
+	engine.Handle(codegen.EffectApply, workflows.EffectHandler{Lease: 15 * time.Minute, Do: code.Apply})
+	engine.Handle(codegen.EffectStop, workflows.EffectHandler{Do: code.Cancel})
 	dep := &deploy.Effects{Q: c.pool, Trigger: cicd.New(c.provider), Secrets: c.secrets, PublicURL: cfg.HooksURL}
 	engine.Handle(deploy.Effect, workflows.EffectHandler{Do: dep.Do})
 	rel := &releases.Effects{Q: c.pool, Store: c.store, Git: c.provider, Tokens: tokens}

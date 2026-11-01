@@ -21,7 +21,7 @@ const DelegationHeader = "Nabu-On-Behalf-Of"
 // MCPHandler serves the MCP of Hammurapi to the personal agents of Nabu
 // (R7, tech §3.6): the JWT of Nabu is checked by its JWKS, the call runs with
 // the rights of the user named by Nabu-On-Behalf-Of; an unknown user is
-// created without roles. Without Nabu every call is 503 agent_disabled.
+// created without roles. Without the verifier every call is 503 nabu_unavailable.
 type MCPHandler struct {
 	Verifier *nabu.Verifier // nil without NABU_URL
 	Server   *mcp.Server
@@ -31,7 +31,7 @@ type MCPHandler struct {
 
 func (h *MCPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if h.Verifier == nil {
-		httpx.Error(w, r, apperr.Unavailable("agent_disabled", "the agent is not connected: Hammurapi works without the agent"))
+		httpx.Error(w, r, ErrUnavailable())
 		return
 	}
 	tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
