@@ -8,8 +8,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/GreenOnGrey/hammurapi-core/internal/cycledata"
-	"github.com/GreenOnGrey/hammurapi-core/internal/features/agent"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/auth"
 )
 
@@ -81,8 +79,4 @@ func TestIdentities(t *testing.T) {
 	if again != id || via != "nabu_delegation" {
 		t.Fatalf("NB-05: %v %v %s", id, again, via)
 	}
-}
-
-func agentInput(content, value string, m *cycledata.Measure) agent.DiscoveryInput {
-	return agent.DiscoveryInput{Content: content, Value: value, Measure: m}
 }

@@ -283,11 +283,12 @@ func (c *Code) Start(ctx context.Context, run workflows.RunRef, payload json.Raw
 			return nil, c.finish(ctx, t, failed(ClassTooLarge, fmt.Errorf("the working copy is too large: %v files, %v bytes; at most %v files and %v bytes",
 				ae.Details["files"], ae.Details["bytes"], ae.Details["maxFiles"], ae.Details["maxBytes"])))
 		}
-		if errors.As(err, &ae) && ae.Code == "upload_in_use" {
-			err = nil // a repeat: the run already took this upload
-		} else if retryable(err) {
+		switch {
+		case errors.As(err, &ae) && ae.Code == "upload_in_use":
+			// a repeat: the run already took this upload
+		case retryable(err):
 			return nil, err // retried by the workflow
-		} else {
+		default:
 			return nil, c.finish(ctx, t, failed(ClassGit, fmt.Errorf("working copy: %w", err)))
 		}
 	}
