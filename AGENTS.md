@@ -62,9 +62,19 @@ golangci-lint run ./... && golangci-lint run --build-tags integration ./internal
 go generate ./internal/platform/git/  # mockgen mocks after changing git.Provider (or other mocked interfaces)
 ```
 
-CI (`.github/workflows/ci.yml`) runs lint, unit and integration tests, `deploy/sync-ref.sh --check`
-and actionlint. Run the same before handing work over.
 Tests that need Linux (symlinks, `/proc`) skip on Windows; run them in Linux or WSL.
+
+## Checks before a commit
+
+A change is ready when every job of `.github/workflows/ci.yml` passes locally at the versions the workflow pins, plus the
+matching lines below. Read the workflow for the exact commands. Install a missing tool outside the repository
+at the pinned version. Name any job you could not run in your report, with the reason.
+
+- Go code: `gofmt -l .` is empty; `golangci-lint` at the version of `ci.yml`, also with `--build-tags integration ./internal/itest/`.
+- `Dockerfile`, `go.mod`: build the target `release` and scan it with `trivy image --timeout 40m --severity CRITICAL,HIGH --ignore-unfixed --ignorefile .trivyignore.yaml <image>`.
+- `.github/**`, `deploy/versions.env`: `actionlint`, `deploy/sync-ref.sh --check`. `DEPLOY_WORKFLOW_REF` and `CHART_VERSION` name tags that are already published.
+- A new variable reaches the stand only through the payload of `hammurapi/.github/workflows/deploy-component.yml` or the chart in `hammurapi-infra`: add it there and to `hammurapi/docs/configuration.md`.
+- API fields: run `npm run lint` and `npm test` in `hammurapi-web`, and keep the old field until the web that stops reading it is deployed.
 
 ## Rules learned the hard way
 
