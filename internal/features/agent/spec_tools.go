@@ -55,6 +55,13 @@ func CheckSubmission(w *mcp.WriterScope, raw json.RawMessage) string {
 	if len(in.Questions) > 0 && in.Area.Generated() {
 		return "tech and qa do not ask questions: use conflicts"
 	}
+	if in.Area.ApproverKind() == domain.ExpertProduct {
+		for _, q := range in.Questions { // R11: the rule does not depend on the model
+			if domain.ExpertKind(q.Audience) == domain.ExpertTechnical {
+				return fmt.Sprintf("%s does not ask technical experts: take an assumption in the text, arch decides it", in.Area)
+			}
+		}
+	}
 	if in.Conflicts != "" && !in.Area.Generated() {
 		return "conflicts are for tech and qa: ask a question instead"
 	}

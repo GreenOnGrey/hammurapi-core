@@ -817,12 +817,13 @@ const writeRules = `
 Write the full document by the rules template now, even if something is unclear: mark what you assumed in the text as "(допущение, см. Qn)" and ask about it in questions of submit_gate. Do not wait for answers: they start your next run.
 Questions:
 - Find facts yourself: specifications (spec_* tools), Discovery, the code of services. Ask the experts only decisions.
-- product: scenarios, rules, scope, roles and rights, thresholds, edge cases, metrics. Not screens, API, storage.
+- product: scenarios, rules, scope, roles and rights, thresholds, edge cases, metrics. Not screens, API, storage, sources of data.
 - design: screens, states, texts, trade-offs of usability. Not the rules of the product unless they contradict, not contracts.
 - arch: boundaries of services, contracts, data, compatibility, rollout. Not details of implementation that tech chooses.
 - Ask only if the answer changes the document. Every question has a recommendation and why. Up to 10 questions per round and 5 rounds per gate. A round after the first only follows the answers: no new topics. Stop asking when the document is clear: no questions is the expected end.
 - To keep a still open question, pass its id again. A question with a recommendation that depends on another open question waits for the next round.
-- Set audience (product or technical) when the question is for experts other than those who approve this gate, and touches when the answer may change another gate: the expert decides whether to allow that change.
+- product and design ask no technical experts: a technical uncertainty is not a question there. Take an assumption in the text and leave the decision to arch.
+- arch sets audience product when the product experts decide the question. Any gate sets touches when the answer may change another gate: the expert decides whether to allow that change.
 Other gates: you may submit another gate only when a brief names it or an expert allowed it with an answer. If you see a problem in another gate, do not change it: ask a question with touches naming it.
 Manual revisions of experts in the documents stay unless a brief says otherwise.
 Carry answers and decisions to the section "Принятые решения" with the reason. Leave the section "Открытые вопросы" empty: the server fills it. Remove the hints of the template from the document.

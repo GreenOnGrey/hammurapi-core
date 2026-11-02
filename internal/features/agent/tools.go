@@ -663,7 +663,7 @@ func Tools(d ToolDeps) []mcp.Tool {
 					"title": map[string]any{"type": "string"}, "body": map[string]any{"type": "string"},
 					"options":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 					"recommended": map[string]any{"type": "string"}, "why": map[string]any{"type": "string"},
-					"audience": map[string]any{"type": "string", "enum": []string{"product", "technical"}},
+					"audience": map[string]any{"type": "string", "enum": []string{"product", "technical"}, "description": "arch only: product, when product experts decide. product and design ask no technical experts"},
 					"touches":  map[string]any{"type": "array", "items": areaProp},
 					"skipArea": map[string]any{"type": "string", "description": "This gate, when the question proposes to skip it: design or arch"},
 				}, "required": []string{"title", "recommended"}}},
