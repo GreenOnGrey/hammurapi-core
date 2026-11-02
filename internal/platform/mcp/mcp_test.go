@@ -71,18 +71,15 @@ func TestEditUnavailableInGeneralMode(t *testing.T) {
 	}
 }
 
-func TestGrantCanEditArea(t *testing.T) {
-	g := Grant{Mode: "spec", ContextType: "feature", Feature: "X", Expert: true}
-	if !g.CanEditArea(domain.AreaProduct) || g.CanEditArea(domain.AreaTech) {
-		t.Fatal("generated gates are not edited by the chat agent")
+// FTR.HMR.DEV-0001 RT-01: a run of the writer submits only its areas.
+func TestWriterScope(t *testing.T) {
+	w := &WriterScope{Mode: "write", Areas: []domain.Area{domain.AreaArch}}
+	if !w.Allows(domain.AreaArch) || w.Allows(domain.AreaProduct) {
+		t.Fatal("scope")
 	}
-	g.Expert = false
-	if g.CanEditArea(domain.AreaProduct) {
-		t.Fatal("non-experts may not edit")
-	}
-	g.Expert, g.Mode = true, "general"
-	if g.CanEditArea(domain.AreaProduct) {
-		t.Fatal("general mode may not edit")
+	var none *WriterScope
+	if none.Allows(domain.AreaArch) {
+		t.Fatal("no scope allows nothing")
 	}
 }
 

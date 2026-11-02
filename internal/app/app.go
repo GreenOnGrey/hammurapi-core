@@ -35,6 +35,7 @@ import (
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/discovery"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/domains"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/features"
+	"github.com/GreenOnGrey/hammurapi-core/internal/features/featuretopics"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/feedback"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/flags"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/gategen"
@@ -291,6 +292,29 @@ func (c *core) toolDeps(s *slices, loadPrincipal agent.PrincipalLoader) agent.To
 			}{r.ID, r.State, r.Position, r.IssueKey})
 			return string(b), nil
 		},
+		// FTR.HMR.DEV-0001: instructions to the writer of specifications
+		RequestSpecRevision: func(ctx context.Context, p *domain.Principal, g mcp.Grant, brief agent.SpecBrief) (string, error) {
+			r, err := gategen.RequestRevision(ctx, c.pool, c.store, discovery.Channel(c.cfg.NabuClientName), p, g, brief)
+			if err != nil {
+				return "", err
+			}
+			// the id comes first: Nabu keeps 140 characters of the result in the step the web reads it from
+			b, _ := json.Marshal(struct {
+				RequestID  uuid.UUID `json:"requestId"`
+				State      string    `json:"state"`
+				Position   *int      `json:"position"`
+				FeatureKey string    `json:"featureKey"`
+				Blocked    bool      `json:"blocked"`
+			}{r.ID, r.State, r.Position, r.FeatureKey, r.Blocked})
+			return string(b), nil
+		},
+		ReadSpecQuestions: func(ctx context.Context, p *domain.Principal, key string) (string, error) {
+			f, err := features.Load(ctx, c.store, key)
+			if err != nil {
+				return "", err
+			}
+			return gategen.QuestionsText(ctx, c.pool, p, f)
+		},
 		SimilarFeaturesCost: func(ctx context.Context, issueID uuid.UUID, limit int) (string, error) {
 			return discovery.SimilarFeaturesCostText(ctx, c.pool, issueID, limit)
 		},
@@ -366,8 +390,16 @@ func RunAPI(ctx context.Context, cfg *config.Config) error {
 	nabuMCP := &nabuconn.MCPHandler{Server: mcpServer, EnsureUser: c.authSvc.EnsureDelegated}
 	// FTR.HMR.DISC-0001: the topics of issues in the chat
 	topics := &issuetopics.Service{Pool: c.pool, Email: c.authRepo.UserEmail}
+	// FTR.HMR.DEV-0001: the topics of features, the writer of specifications
+	featureTopics := &featuretopics.Service{Pool: c.pool, Store: c.store, Email: c.authRepo.UserEmail}
+	writer := gategen.Generator{Q: c.pool}
+	sl.features.Writer, sl.features.OpenCounts = writer.Active, writer.OpenCounts
+	sl.features.Closed = featureTopics.Archive
+	sl.features.Unlocked = writer.Wake
+	sl.codegen.Closed = featureTopics.Archive
 	if nabuSvc.Enabled() {
 		topics.Nabu = nabuSvc.Client
+		featureTopics.Nabu = nabuSvc.Client
 		issueSvc.KeyChanged = topics.Rename
 		issueSvc.Closed = topics.Archive
 		nabuChat = &nabuconn.Chat{Client: nabuSvc.Client, Hub: hub, Email: c.authRepo.UserEmail}
@@ -401,6 +433,8 @@ func RunAPI(ctx context.Context, cfg *config.Config) error {
 			overviewSvc.Routes(r)
 			issueSvc.Routes(r)
 			topics.Routes(r)
+			featureTopics.Routes(r)
+			(&gategen.Service{Pool: c.pool, Store: c.store, Events: c.events}).Routes(r)
 			sl.discovery.Routes(r)
 			sl.metrics.Routes(r) // FTR.HMR.DISC-0001 R23: the sources to choose from
 			sl.spec.Routes(r)
@@ -523,8 +557,12 @@ func RunWorker(ctx context.Context, cfg *config.Config) error {
 	notices := &discovery.NoticeEffects{Q: c.pool, Email: c.authRepo.UserEmail}
 	notices.Nabu = ns.Client
 	engine.Handle(discovery.EffectNotice, workflows.EffectHandler{Do: notices.Do})
-	gen := &gategen.Effects{Store: c.store, Git: c.provider, Tokens: tokens, Runner: agents, DefaultBranch: cfg.GitDefaultBranch, Timeout: 30 * time.Minute}
-	engine.Handle(gategen.Effect, workflows.EffectHandler{Lease: 31 * time.Minute, Do: gen.Do})
+	specNotices := &gategen.NoticeEffects{Q: c.pool, Email: c.authRepo.UserEmail, Nabu: ns.Client}
+	engine.Handle(gategen.EffectNotice, workflows.EffectHandler{Do: specNotices.Do})
+	gen := &gategen.Effects{Store: c.store, Git: c.provider, Tokens: tokens, Runner: agents, DefaultBranch: cfg.GitDefaultBranch, Timeout: cfg.WriterTimeout}
+	engine.Handle(gategen.Effect, workflows.EffectHandler{Lease: cfg.WriterTimeout + time.Minute, Do: gen.Do})
+	engine.Handle(gategen.EffectTrace, workflows.EffectHandler{Do: gen.DoTrace})
+	engine.Handle(gategen.EffectDrain, workflows.EffectHandler{Do: (&gategen.DrainEffects{Q: c.pool}).Do})
 	check := &validation.Effects{Store: c.store, Git: c.provider, Runner: agents}
 	engine.Handle(validation.EffectCheck, workflows.EffectHandler{Lease: 30 * time.Minute, Do: check.Check})
 	engine.Handle(codegen.EffectStart, workflows.EffectHandler{Lease: 15 * time.Minute, Do: code.Start})

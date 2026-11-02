@@ -61,7 +61,21 @@ type Feature struct {
 	DeletedByName        *string
 	DeletedAt            *time.Time
 	BranchCleanupPending bool
+	// SpecFlow, SpecStage and SkippedAreas are the stages of the specification
+	// (FTR.HMR.DEV-0001 arch §4.2).
+	SpecFlow     string
+	SpecStage    *string
+	SkippedAreas []string
 }
+
+// Flows of a specification (FTR.HMR.DEV-0001 R2, R31).
+const (
+	FlowWriter = "writer"
+	FlowLegacy = "legacy"
+)
+
+// StageGenerated is the stage of tech and qa.
+const StageGenerated = "generated"
 
 // IsFix reports whether the feature is a fix feature.
 func (f *Feature) IsFix() bool { return f.ParentID != nil }

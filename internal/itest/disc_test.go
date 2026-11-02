@@ -219,8 +219,8 @@ func newDiscRig(t *testing.T) *discRig {
 	ctx := context.Background()
 	r := &discRig{t: t, nabu: newFakeNabu(t), emails: map[uuid.UUID]string{}}
 	metricSource(t, "ch", "clickhouse")
-	suffix := strings.ToUpper(uuid.NewString()[:4])
-	r.domainKey, r.alt = "D"+suffix[:3], "E"+suffix[:3]
+	suffix := strings.ToUpper(uuid.NewString()[:7]) // the rigs of a run share the domains: three digits collided
+	r.domainKey, r.alt = "D"+suffix[:6], "E"+suffix[:6]
 	user := func(name string, expert bool) *domain.Principal {
 		var id uuid.UUID
 		email := strings.ToLower(name) + "-" + suffix + "@company.ru"

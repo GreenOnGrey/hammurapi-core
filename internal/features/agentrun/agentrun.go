@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -63,6 +64,13 @@ var ErrNoAgent = errors.New("the scenario is not bound to an agent of Nabu")
 // IsNoAgent reports that no agent can run the scenario; optional steps (the
 // code check) are skipped on it.
 func IsNoAgent(err error) bool { return errors.Is(err, ErrNoAgent) }
+
+// IsNabuUnavailable reports that Nabu did not take the run: it waits for Nabu
+// (FTR.HMR.CMN-0007 R2), unlike a failure of the model.
+func IsNabuUnavailable(err error) bool {
+	var le *LLMError
+	return errors.As(err, &le) && le.Class == agent.ErrUnavailable && strings.HasPrefix(le.Connection, "Nabu: ")
+}
 
 // LLMError is a classified LLM failure of a session (R20).
 type LLMError struct {

@@ -5,6 +5,8 @@ package approvals
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/GreenOnGrey/hammurapi-core/internal/apperr"
@@ -71,7 +73,9 @@ func (s *Service) load(ctx context.Context, uniqueID string, area domain.Area) (
 // Submit moves a draft gate to in_review. Any expert of the domain submits,
 // including the generated tech and qa. Product requirements without an ID
 // return 409 requirements_without_id with their list unless force is set (R15).
-func (s *Service) Submit(ctx context.Context, p *domain.Principal, uniqueID string, area domain.Area, force bool) (*specdata.Gate, error) {
+// FTR.HMR.DEV-0001 R14: a gate with open questions returns 409 open_questions
+// unless forceQuestions is set; then they go to the section of the document (FTR.HMR.DEV-0001 R13).
+func (s *Service) Submit(ctx context.Context, p *domain.Principal, uniqueID string, area domain.Area, force, forceQuestions bool) (*specdata.Gate, error) {
 	f, g, err := s.load(ctx, uniqueID, area)
 	if err != nil {
 		return nil, err
@@ -88,6 +92,9 @@ func (s *Service) Submit(ctx context.Context, p *domain.Principal, uniqueID stri
 	if g.Status != domain.GateDraft {
 		return nil, apperr.Conflict("not_draft", "only a draft can be submitted for approval")
 	}
+	if err := s.checkRun(ctx, f, area); err != nil {
+		return nil, err
+	}
 	if area == domain.AreaProduct && !force {
 		token, err := s.tokens.Token(ctx, p.UserID)
 		if err != nil {
@@ -103,6 +110,9 @@ func (s *Service) Submit(ctx context.Context, p *domain.Principal, uniqueID stri
 					With("requirements", u)
 			}
 		}
+	}
+	if err := s.writeOpenQuestions(ctx, p, f, g, forceQuestions); err != nil {
+		return nil, err
 	}
 	now := time.Now()
 	g.Status, g.SubmittedAt = domain.GateInReview, &now
@@ -164,6 +174,11 @@ func (s *Service) Approve(ctx context.Context, p *domain.Principal, uniqueID str
 	if head != g.HeadCommit {
 		return nil, apperr.Conflict("document_changed", "the document changed, reload the page")
 	}
+	if err := s.checkRun(ctx, f, area); err != nil {
+		return nil, err
+	}
+	// FTR.HMR.DEV-0001 R22: the text differs from the one approved before
+	reapproved := g.ApprovedCommit != nil && *g.ApprovedCommit != head
 	now := time.Now()
 	g.Status, g.ApprovedCommit, g.ApprovedBy, g.ApprovedAt = domain.GateApproved, &head, &p.UserID, &now
 	err = s.store.InTx(ctx, func(tx specdata.Store) error {
@@ -179,19 +194,73 @@ func (s *Service) Approve(ctx context.Context, p *domain.Principal, uniqueID str
 	gates.PublishGateUpdated(ctx, s.events, f.UniqueID, g)
 	s.events.Publish(ctx, events.Event{Type: events.ApprovalsChanged, Data: map[string]string{"uniqueId": f.UniqueID}})
 	s.events.Publish(ctx, events.Event{Type: events.FocusChanged, Data: map[string]string{"uniqueId": f.UniqueID}})
-	if !area.Generated() && s.gen != nil {
+	if s.gen != nil {
 		for i := range all {
 			if all[i].Area == area {
 				all[i].Status = domain.GateApproved
 			}
 		}
-		if features.HumanGatesApproved(all) {
-			if err := s.gen.Generate(ctx, f, []domain.Area{domain.AreaTech, domain.AreaQA}, p.UserID, ""); err != nil {
-				return nil, err
-			}
+		if err := s.gen.AfterApproval(ctx, f, area, reapproved, all, p.UserID); err != nil {
+			return nil, err
 		}
 	}
 	return g, nil
+}
+
+// checkRun refuses what collides with a run of the writer on the gate (FTR.HMR.DEV-0001 R25).
+func (s *Service) checkRun(ctx context.Context, f *specdata.Feature, area domain.Area) error {
+	if s.gen == nil {
+		return nil
+	}
+	run, err := s.gen.Active(ctx, f.ID)
+	if err != nil {
+		return err
+	}
+	if run.Touches(area) {
+		return features.ErrSpecRunActive
+	}
+	return nil
+}
+
+// writeOpenQuestions refuses a gate with open questions unless forced, then
+// writes them to its section "Открытые вопросы" (FTR.HMR.DEV-0001 R13, R14). The commit is made
+// here: the projection does not wait for the webhook.
+func (s *Service) writeOpenQuestions(ctx context.Context, p *domain.Principal, f *specdata.Feature, g *specdata.Gate, force bool) error {
+	if s.gen == nil || g.Area.Generated() {
+		return nil
+	}
+	open, err := s.gen.OpenQuestions(ctx, f.ID, g.Area)
+	if err != nil || len(open) == 0 {
+		return err
+	}
+	if !force {
+		list := make([]map[string]string, 0, len(open))
+		for _, q := range open {
+			list = append(list, map[string]string{"id": q.ID, "title": q.Title})
+		}
+		return apperr.Conflict("open_questions", "the gate has open questions; answer them or submit anyway").With("questions", list)
+	}
+	token, err := s.tokens.Token(ctx, p.UserID)
+	if err != nil {
+		return err
+	}
+	path := git.SpecPath(f.DomainKey, f.SystemKey, f.UniqueID, string(g.Area))
+	doc, err := s.git.GetFile(ctx, token, f.Branch, path)
+	if err != nil {
+		return auth.MapGitError(err)
+	}
+	var b strings.Builder
+	for _, q := range open {
+		fmt.Fprintf(&b, "- **%s.** %s Рекомендация: %s.\n", q.ID, q.Title, q.Recommended)
+	}
+	content := markdown.FillSection(string(doc.Content), "Открытые вопросы", b.String(), "открытые вопросы", "open questions")
+	msg := git.Trailers{Feature: f.UniqueID, Area: string(g.Area), Generated: true}.Message(fmt.Sprintf("%s: open questions of %s", f.UniqueID, g.Area))
+	sha, err := s.git.Commit(ctx, token, f.Branch, msg, []git.FileChange{{Path: path, Content: []byte(content)}})
+	if err != nil {
+		return auth.MapGitError(err)
+	}
+	g.HeadCommit = sha
+	return nil
 }
 
 // List returns the approvals queue; empty for users who are not experts.

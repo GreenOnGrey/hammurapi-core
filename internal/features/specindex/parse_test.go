@@ -141,3 +141,23 @@ func TestSections(t *testing.T) {
 		t.Fatalf("%q %+v", head, secs)
 	}
 }
+
+// FTR.HMR.DEV-0001 WR-24: a document by the templates of rules/ is found by the spec_* tools.
+func TestDocumentByTemplate(t *testing.T) {
+	md := "---\nparent: FTR.FMS.CAR-0000  # ID родительской фичи\n---\n\n# Продуктовая спецификация: Скидка\n\n## Требования\n\n### Возврат\n\n" +
+		"**R1.** Скидка за ранний возврат, см. FTR.FMS.CAR-0002-R3.\n\n- Критерии приёмки:\n  - Дано клиент вернул авто раньше, когда возврат принят, тогда скидка начислена.\n"
+	if p, err := Parent(md); err != nil || p != "FTR.FMS.CAR-0000" {
+		t.Fatalf("parent %q %v", p, err)
+	}
+	if _, problem := CheckID("FTR.FMS.CAR-0000", "FMS", "CAR"); problem != nil {
+		t.Fatalf("parent of the template: %+v", problem)
+	}
+	reqs := Requirements(md)
+	if len(reqs) != 1 || reqs[0].ID != "R1" || len(reqs[0].Criteria) != 1 || reqs[0].Section != "Возврат" {
+		t.Fatalf("requirements %+v", reqs)
+	}
+	refs := References(md, "FTR.FMS.CAR-0005")
+	if len(refs) != 1 || refs[0].Target != "FTR.FMS.CAR-0002" || refs[0].Req != "R3" {
+		t.Fatalf("references %+v", refs)
+	}
+}

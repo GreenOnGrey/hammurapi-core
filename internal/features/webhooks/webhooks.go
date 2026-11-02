@@ -609,8 +609,8 @@ func (p *Processor) applyCommit(ctx context.Context, tx specdata.Store, f *specd
 		if g.HeadCommit == sha {
 			continue // a commit Hammurapi made itself (creation, import, deletion)
 		}
-		if trailers.Generated && area.Generated() {
-			continue // tech/qa generation is projected by the gate_generation workflow
+		if trailers.Generated {
+			continue // a commit of the writer is projected by the gate_generation workflow
 		}
 		wasInReview := g.Status == domain.GateInReview
 		if t.specRemoved {

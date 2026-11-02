@@ -50,13 +50,15 @@ func (h *Handlers) submit(w http.ResponseWriter, r *http.Request) error {
 	}
 	var in struct {
 		Force bool `json:"force"`
+		// ForceQuestions submits a gate with open questions (FTR.HMR.DEV-0001 R14).
+		ForceQuestions bool `json:"forceQuestions"`
 	}
 	if r.ContentLength > 0 {
 		if err := httpx.Decode(r, &in); err != nil {
 			return err
 		}
 	}
-	g, err := h.svc.Submit(r.Context(), p, chi.URLParam(r, "uniqueId"), a, in.Force)
+	g, err := h.svc.Submit(r.Context(), p, chi.URLParam(r, "uniqueId"), a, in.Force, in.ForceQuestions)
 	if err != nil {
 		return err
 	}

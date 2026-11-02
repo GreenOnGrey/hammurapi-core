@@ -35,6 +35,12 @@ type QuestionText struct {
 	Options     []string `json:"options"`
 	Recommended string   `json:"recommended"`
 	Why         string   `json:"why"`
+	// Audience, Touches and SkipArea are for the questions of the writer
+	// (FTR.HMR.DEV-0001 R6, R11, R21): who answers when it is not the experts of
+	// the gate, the other gates the answer may change, the gate it proposes to skip.
+	Audience string   `json:"audience,omitempty"`
+	Touches  []string `json:"touches,omitempty"`
+	SkipArea string   `json:"skipArea,omitempty"`
 }
 
 // Question is an open question of the researcher to the experts.
@@ -78,10 +84,16 @@ func (s AnswerSource) OfBrief() bool { return s == AnswerUser || s == AnswerMemo
 // Answer is an answer to an open question in an instruction to the
 // researcher; Question is the title of the question, set by the server.
 type Answer struct {
-	QuestionID string       `json:"questionId"`
-	Question   string       `json:"question"`
-	Answer     string       `json:"answer"`
-	Source     AnswerSource `json:"source"`
+	// Area is the gate of a question of the writer (FTR.HMR.DEV-0001).
+	Area string `json:"area,omitempty"`
+	// AllowTouches is the decision of the expert in a brief; Touches are the gates
+	// it opened, set by the server (FTR.HMR.DEV-0001 R21).
+	AllowTouches bool         `json:"allowTouches,omitempty"`
+	Touches      []string     `json:"touches,omitempty"`
+	QuestionID   string       `json:"questionId"`
+	Question     string       `json:"question"`
+	Answer       string       `json:"answer"`
+	Source       AnswerSource `json:"source"`
 }
 
 // NumberQuestions numbers the questions of a new revision: a question asked
@@ -98,7 +110,8 @@ func NumberQuestions(prev []Question, c QuestionCounters, in []QuestionInput) (o
 	begun := false
 	for _, qi := range in {
 		q := Question{QuestionText: QuestionText{Title: clip(qi.Title, maxQuestionTitle), Body: clip(qi.Body, maxQuestionBody),
-			Recommended: clip(qi.Recommended, maxRecommended), Why: clip(qi.Why, maxWhy), Options: []string{}}}
+			Recommended: clip(qi.Recommended, maxRecommended), Why: clip(qi.Why, maxWhy), Options: []string{},
+			Audience: qi.Audience, Touches: qi.Touches, SkipArea: qi.SkipArea}}
 		for _, o := range qi.Options {
 			if o = clip(o, maxQuestionOption); o != "" && len(q.Options) < maxQuestionOptions {
 				q.Options = append(q.Options, o)

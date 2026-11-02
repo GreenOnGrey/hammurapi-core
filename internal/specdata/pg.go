@@ -75,7 +75,7 @@ const featureCols = `
 	f.id, f.unique_id, f.system_id, d.key, s.key, d.approval_required, f.number, f.title,
 	f.branch_name, f.pr_number, f.pr_url, f.phase, f.is_problem, f.imported, f.metric, f.flag_key,
 	f.parent_id, p.unique_id, COALESCE(f.created_by, '00000000-0000-0000-0000-000000000000'), COALESCE(cu.display_name, ''), f.created_at,
-	f.deleted_by, du.display_name, f.deleted_at, f.branch_cleanup_pending`
+	f.deleted_by, du.display_name, f.deleted_at, f.branch_cleanup_pending, f.spec_flow, f.spec_stage, f.skipped_areas`
 
 const featureFrom = `
 	FROM features f
@@ -90,7 +90,7 @@ func scanFeature(row pgx.Row, extra ...any) (*Feature, error) {
 	dest := []any{&f.ID, &f.UniqueID, &f.SystemID, &f.DomainKey, &f.SystemKey, &f.ApprovalRequired, &f.Number, &f.Title,
 		&f.Branch, &f.PRNumber, &f.PRURL, &f.Phase, &f.IsProblem, &f.Imported, &f.Metric, &f.FlagKey,
 		&f.ParentID, &f.ParentUniqueID, &f.CreatedBy, &f.CreatedByName, &f.CreatedAt,
-		&f.DeletedBy, &f.DeletedByName, &f.DeletedAt, &f.BranchCleanupPending}
+		&f.DeletedBy, &f.DeletedByName, &f.DeletedAt, &f.BranchCleanupPending, &f.SpecFlow, &f.SpecStage, &f.SkippedAreas}
 	if err := row.Scan(append(dest, extra...)...); err != nil {
 		return nil, err
 	}
@@ -111,12 +111,15 @@ func (s *PG) InsertFeature(ctx context.Context, f *Feature) error {
 	if f.Phase == "" {
 		f.Phase = domain.PhaseSpec
 	}
+	if f.SpecFlow == "" {
+		f.SpecFlow = FlowLegacy
+	}
 	return s.q.QueryRow(ctx, `
 		INSERT INTO features (unique_id, system_id, number, title, branch_name, pr_number, pr_url, phase,
-			is_problem, imported, metric, flag_key, parent_id, created_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id, created_at`,
+			is_problem, imported, metric, flag_key, parent_id, created_by, spec_flow, spec_stage)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id, created_at`,
 		f.UniqueID, f.SystemID, f.Number, f.Title, f.Branch, f.PRNumber, f.PRURL, f.Phase,
-		f.IsProblem, f.Imported, f.Metric, f.FlagKey, f.ParentID, f.CreatedBy).
+		f.IsProblem, f.Imported, f.Metric, f.FlagKey, f.ParentID, f.CreatedBy, f.SpecFlow, f.SpecStage).
 		Scan(&f.ID, &f.CreatedAt)
 }
 

@@ -178,6 +178,8 @@ func (m Machine) evaluate(ctx context.Context, tx pgx.Tx, run *workflows.Run, f 
 type Service struct {
 	store  specdata.Store
 	events events.Publisher
+	// Closed archives the topics of the specification of a feature that left it (FTR.HMR.DEV-0001 R20).
+	Closed func(ctx context.Context, featureID uuid.UUID)
 }
 
 // NewService creates the service.
@@ -265,6 +267,9 @@ func (s *Service) StartCodegen(ctx context.Context, p *domain.Principal, key str
 	})
 	if err != nil {
 		return nil, err
+	}
+	if s.Closed != nil { // FTR.HMR.DEV-0001 R20: the topics of the specification end here
+		s.Closed(context.WithoutCancel(ctx), f.ID)
 	}
 	s.events.Publish(ctx, events.Event{Type: events.FeatureUpdated, Data: map[string]any{"uniqueId": f.UniqueID, "phase": domain.PhaseCodegen}})
 	return plan, nil

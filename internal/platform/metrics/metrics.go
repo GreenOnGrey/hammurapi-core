@@ -111,6 +111,19 @@ var (
 	NabuNotices = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "hammurapi_nabu_notice_total", Help: "Attempts to send notices of Hammurapi to the topics of users by result (sent, gone, error); an error is retried.",
 	}, []string{"result"})
+	SpecRuns = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "hammurapi_spec_runs_total", Help: "Runs of the writer of specifications by mode and result (done, failed).",
+	}, []string{"mode", "result"})
+	SpecRunDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name: "hammurapi_spec_run_duration_seconds", Help: "Duration of the agent session of a run of the writer by mode.",
+		Buckets: []float64{60, 180, 300, 600, 1200, 1800, 3600},
+	}, []string{"mode"})
+	SpecRequests = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "hammurapi_spec_requests_total", Help: "Instructions to the writer by the state they reached (queued, running, done, failed).",
+	}, []string{"state"})
+	FeatureTopicsCreated = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "hammurapi_feature_topics_created_total", Help: "Topics of features created in Nabu by a first message.",
+	})
 	IssueTopicsCreated = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "hammurapi_issue_topics_created_total", Help: "Topics of issues created in Nabu by a first message.",
 	})
@@ -131,7 +144,7 @@ func init() {
 		SpecScanRuns, SpecScanDuration, SpecIndexIssuesOpen, SpecDocuments, SpecIndexedFeatures,
 		WorkflowRuns, WorkflowTransitionDuration, WorkflowBlocked, EffectsFailed, CodeTaskStates, CodeTaskDuration,
 		CodeTokens, DeployRuns, ReleaseRollbacks,
-		DiscoveryRequests, DiscoveryRequestDuration, NabuNotices, IssueTopicsCreated, IssueTopicsArchived, DiscoveryQuestionsDropped,
+		SpecRuns, SpecRunDuration, SpecRequests, FeatureTopicsCreated, DiscoveryRequests, DiscoveryRequestDuration, NabuNotices, IssueTopicsCreated, IssueTopicsArchived, DiscoveryQuestionsDropped,
 	)
 }
 

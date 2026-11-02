@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 
@@ -62,12 +63,23 @@ type Grant struct {
 	// Sink receives structured results of worker contexts (save_discovery,
 	// submit_gate, report_discrepancy); nil in the chat.
 	Sink func(kind string, payload json.RawMessage) error
+	// Writer limits what a run of the writer may submit (FTR.HMR.DEV-0001 R21);
+	// the server sets it, nil outside such a run.
+	Writer *WriterScope
 }
 
-// CanEditArea reports whether the grant allows edit_spec in area a: the chat
-// in a feature context, an expert, and a gate the agent does not generate.
-func (g Grant) CanEditArea(a domain.Area) bool {
-	return g.Mode == ModeSpec && g.ContextType == "feature" && g.Feature != "" && g.Expert && !a.Generated()
+// WriterScope is the mode of a run of the writer and the areas it may submit.
+type WriterScope struct {
+	Mode  string
+	Areas []domain.Area
+}
+
+// Allows reports whether the run may submit the area.
+func (w *WriterScope) Allows(a domain.Area) bool {
+	if w == nil {
+		return false
+	}
+	return slices.Contains(w.Areas, a)
 }
 
 // CanEditDiscovery reports whether the grant allows edit_discovery.
@@ -233,7 +245,7 @@ func (s *Server) dispatch(ctx context.Context, g Grant, req request) (any, *rpcE
 			"protocolVersion": v,
 			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
 			"serverInfo":      map[string]string{"name": "hammurapi", "version": "1.0.0"},
-			"instructions":    "Hammurapi specification tools. Use search_specs and read_spec to research; edit_spec to change a gate document (spec mode only). Deleting specifications is not possible through tools: the user deletes them in the Hammurapi UI.",
+			"instructions":    "Hammurapi specification tools. Use search_specs and read_spec to research; request_spec_revision to change a specification: the writer agent writes the documents. Deleting specifications is not possible through tools: the user deletes them in the Hammurapi UI.",
 		}, nil
 	case "ping":
 		return map[string]any{}, nil

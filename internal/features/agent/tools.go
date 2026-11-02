@@ -69,6 +69,11 @@ type ToolDeps struct {
 	// RequestRevision gives the brief of an expert to the researcher
 	// (FTR.HMR.DISC-0001 R7, R28, tech §4.2) and returns the answer for the agent.
 	RequestRevision func(ctx context.Context, p *domain.Principal, g mcp.Grant, issueKey string, b RevisionBrief) (string, error)
+	// RequestSpecRevision gives the brief of an expert to the writer of
+	// specifications (FTR.HMR.DEV-0001 R12, R17) and returns the answer for the agent.
+	RequestSpecRevision func(ctx context.Context, p *domain.Principal, g mcp.Grant, b SpecBrief) (string, error)
+	// ReadSpecQuestions answers read_spec_questions.
+	ReadSpecQuestions func(ctx context.Context, p *domain.Principal, featureKey string) (string, error)
 	// SimilarFeaturesCost answers similar_features_cost (FTR.HMR.DISC-0001 tech §4.4).
 	SimilarFeaturesCost func(ctx context.Context, issueID uuid.UUID, limit int) (string, error)
 	// CheckEstimate validates the estimate of save_discovery (tech §5.1).
@@ -92,10 +97,9 @@ type IssueInput struct {
 }
 
 var (
-	readers   = []string{mcp.ModeGeneral, mcp.ModeSpec, mcp.ModeDiscovery, mcp.ModeGenerate, mcp.ModeCheck, mcp.ModeTask, mcp.ModeNabu}
-	research  = []string{mcp.ModeGeneral, mcp.ModeSpec, mcp.ModeDiscovery, mcp.ModeGenerate, mcp.ModeCheck, mcp.ModeNabu}
-	codeRead  = []string{mcp.ModeDiscovery, mcp.ModeGenerate, mcp.ModeCheck}
-	specModes = []string{mcp.ModeSpec}
+	readers  = []string{mcp.ModeGeneral, mcp.ModeSpec, mcp.ModeDiscovery, mcp.ModeGenerate, mcp.ModeCheck, mcp.ModeTask, mcp.ModeNabu}
+	research = []string{mcp.ModeGeneral, mcp.ModeSpec, mcp.ModeDiscovery, mcp.ModeGenerate, mcp.ModeCheck, mcp.ModeNabu}
+	codeRead = []string{mcp.ModeDiscovery, mcp.ModeGenerate, mcp.ModeCheck}
 )
 
 func schema(props map[string]any, required ...string) map[string]any {
@@ -334,7 +338,7 @@ func Tools(d ToolDeps) []mcp.Tool {
 		},
 		{
 			Name:        "read_spec",
-			Description: "Read the current markdown of a feature's gate document.",
+			Description: "Read the current markdown of a feature's gate document." + SpecRule,
 			Modes:       readers,
 			ReadOnly:    true,
 			InputSchema: schema(map[string]any{"uniqueId": map[string]any{"type": "string"}, "area": areaProp}, "uniqueId", "area"),
@@ -500,57 +504,60 @@ func Tools(d ToolDeps) []mcp.Tool {
 			},
 		},
 		{
-			Name: "edit_spec",
-			Description: "Replace the full markdown of a gate document of the current feature: product, design or arch (tech and qa are generated — use regenerate_gate). " +
-				"Allowed only in the chat of a feature, for domain experts, and only for gates that are not approved. Supported markdown: CommonMark + GFM " +
-				"(tables, task lists, strikethrough), no raw HTML or footnotes; keep front matter of fix documents. Requirements: **R<n>.** with acceptance criteria.",
-			Modes:       specModes,
-			InputSchema: schema(map[string]any{"area": areaProp, "content": map[string]any{"type": "string"}}, "area", "content"),
+			Name:        "request_spec_revision",
+			Description: SpecRevisionToolDescription,
+			Modes:       []string{mcp.ModeNabu},
+			InputSchema: schema(map[string]any{
+				"featureKey": map[string]any{"type": "string", "description": "Key of the feature, e.g. FTR.FMS.CAR-0005"},
+				"areas":      map[string]any{"type": "array", "items": areaProp, "description": "Every gate to change, also an approved one: it returns to draft and is approved again by its experts"},
+				"answers": map[string]any{"type": "array", "maxItems": 10, "description": "Answers to the open questions, confirmed by the user",
+					"items": map[string]any{"type": "object", "properties": map[string]any{
+						"area":       areaProp,
+						"questionId": map[string]any{"type": "string", "description": "Number of an open question of the gate, e.g. Q3"},
+						"answer":     map[string]any{"type": "string", "minLength": 1, "maxLength": 1000},
+						"source": map[string]any{"type": "string", "enum": []cycledata.AnswerSource{cycledata.AnswerUser, cycledata.AnswerMemory},
+							"description": "user — the user answered; memory — you proposed it from what you know of the user and the user confirmed it"},
+						"allowTouches": map[string]any{"type": "boolean", "description": "The user agrees that the other gates the question names may change"},
+					}, "required": []string{"area", "questionId", "answer", "source"}}},
+				"skipAreas":    map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": []string{"design", "arch"}}, "description": "Gates the experts decided to skip"},
+				"restoreAreas": map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": []string{"design", "arch"}}, "description": "Skipped gates that are needed after all"},
+				"context":      map[string]any{"type": "string", "maxLength": 4000, "description": "What you know of the user and the team that concerns this feature, up to 4000 characters"},
+				"instructions": map[string]any{"type": "string", "maxLength": 4000, "description": "What to change and why, understandable without the conversation, up to 4000 characters"},
+			}, "featureKey"),
 			Handler: func(ctx context.Context, g mcp.Grant, raw json.RawMessage) (string, error) {
-				var a struct{ Area, Content string }
-				if err := json.Unmarshal(raw, &a); err != nil {
-					return "", &mcp.ToolError{Msg: "invalid arguments"}
-				}
-				area, err := domain.ParseArea(a.Area)
-				if err != nil {
-					return "", &mcp.ToolError{Msg: err.Error()}
-				}
-				if err := CheckEdit(ctx, d.Store, g, area); err != nil {
-					return "", err
+				var a SpecBrief
+				_ = json.Unmarshal(raw, &a)
+				if d.RequestSpecRevision == nil {
+					return "", &mcp.ToolError{Msg: "not available in this context"}
 				}
 				p, err := d.Principal(ctx, g.UserID)
 				if err != nil {
 					return "", err
 				}
-				res, err := d.Gates.SaveDocument(ctx, p, g.Feature, area, gates.SaveInput{Content: a.Content}, true)
-				if err != nil {
-					return "", toolErr(err)
-				}
-				if res.Commit == nil {
-					return "No changes: the document already has this content.", nil
-				}
-				return fmt.Sprintf("Saved %s/%s as commit %s. The gate returns to draft.", g.Feature, area, *res.Commit), nil
+				out, err := d.RequestSpecRevision(ctx, p, g, a)
+				return out, toolErr(err)
 			},
 		},
 		{
-			Name:        "regenerate_gate",
-			Description: "Ask for regeneration of the tech or qa gate of the current feature, taking the user's comment into account.",
-			Modes:       specModes,
-			InputSchema: schema(map[string]any{"area": map[string]any{"type": "string", "enum": []string{"tech", "qa"}}, "comment": map[string]any{"type": "string"}}, "area", "comment"),
+			Name:        "read_spec_questions",
+			Description: "Open questions of the writer about a feature by gate: recommendation, options, who answers them and the rounds left." + SpecRule,
+			Modes:       []string{mcp.ModeNabu},
+			ReadOnly:    true,
+			InputSchema: schema(map[string]any{"featureKey": map[string]any{"type": "string"}}, "featureKey"),
 			Handler: func(ctx context.Context, g mcp.Grant, raw json.RawMessage) (string, error) {
-				var a struct{ Area, Comment string }
+				var a struct {
+					FeatureKey string `json:"featureKey"`
+				}
 				_ = json.Unmarshal(raw, &a)
-				if g.ContextType != "feature" || !g.Expert {
-					return "", &mcp.ToolError{Msg: "regeneration is available in the chat of a feature, for domain experts"}
+				if d.ReadSpecQuestions == nil {
+					return "", &mcp.ToolError{Msg: "not available in this context"}
 				}
 				p, err := d.Principal(ctx, g.UserID)
 				if err != nil {
 					return "", err
 				}
-				if err := d.Gates.Regenerate(ctx, p, g.Feature, domain.Area(a.Area), a.Comment); err != nil {
-					return "", toolErr(err)
-				}
-				return fmt.Sprintf("Regeneration of %s started; the gate will return to draft when it is ready.", a.Area), nil
+				out, err := d.ReadSpecQuestions(ctx, p, a.FeatureKey)
+				return out, toolErr(err)
 			},
 		},
 		{
@@ -643,11 +650,43 @@ func Tools(d ToolDeps) []mcp.Tool {
 			},
 		},
 		{
-			Name:        "submit_gate",
-			Description: "Submit the generated markdown of the tech or qa gate. tech must contain a table of changes by service with the requirements of each service; qa a table of test cases (ID, level U/I/E, requirements).",
+			Name: "submit_gate",
+			Description: "Submit a document of the specification as the writer. tech must contain a table of changes by service with the requirements of each service; qa a table of test cases (ID, level U/I/E, requirements). " +
+				"product, design and arch may ask a round of questions; tech and qa report contradictions in conflicts. unchanged: true — a checked gate needs no change.",
+			Modes: []string{mcp.ModeGenerate},
+			InputSchema: schema(map[string]any{"area": areaProp, "content": map[string]any{"type": "string"},
+				"unchanged":     map[string]any{"type": "boolean"},
+				"changeSummary": map[string]any{"type": "string", "description": "What changed, 2–4 points for the authors of the instructions"},
+				"conflicts":     map[string]any{"type": "string", "description": "tech and qa only: contradictions with the gates above"},
+				"questions": map[string]any{"type": "array", "maxItems": 10, "items": map[string]any{"type": "object", "properties": map[string]any{
+					"id":    map[string]any{"type": "string", "description": "The number of an open question asked again; empty for a new one"},
+					"title": map[string]any{"type": "string"}, "body": map[string]any{"type": "string"},
+					"options":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+					"recommended": map[string]any{"type": "string"}, "why": map[string]any{"type": "string"},
+					"audience": map[string]any{"type": "string", "enum": []string{"product", "technical"}},
+					"touches":  map[string]any{"type": "array", "items": areaProp},
+					"skipArea": map[string]any{"type": "string", "description": "This gate, when the question proposes to skip it: design or arch"},
+				}, "required": []string{"title", "recommended"}}},
+			}, "area"),
+			Handler: func(ctx context.Context, g mcp.Grant, raw json.RawMessage) (string, error) {
+				if msg := CheckSubmission(g.Writer, raw); msg != "" {
+					return "", &mcp.ToolError{Msg: msg}
+				}
+				return sinkHandler("gate")(ctx, g, raw)
+			},
+		},
+		{
+			Name:        "submit_gate_file",
+			Description: "Submit a file of the design gate beside its spec.md: a self-contained HTML mockup (mockups.html) or an SVG, up to 2 MiB, up to 3 files, no network dependencies except fonts.",
 			Modes:       []string{mcp.ModeGenerate},
-			InputSchema: schema(map[string]any{"area": map[string]any{"type": "string", "enum": []string{"tech", "qa"}}, "content": map[string]any{"type": "string"}}, "area", "content"),
-			Handler:     sinkHandler("gate"),
+			InputSchema: schema(map[string]any{"area": map[string]any{"type": "string", "enum": []string{"design"}},
+				"path": map[string]any{"type": "string"}, "content": map[string]any{"type": "string"}}, "area", "path", "content"),
+			Handler: func(ctx context.Context, g mcp.Grant, raw json.RawMessage) (string, error) {
+				if msg := CheckFile(g.Writer, raw); msg != "" {
+					return "", &mcp.ToolError{Msg: msg}
+				}
+				return sinkHandler("gate_file")(ctx, g, raw)
+			},
 		},
 		{
 			Name:        "report_discrepancy",
@@ -676,42 +715,6 @@ func sinkHandler(kind string) func(ctx context.Context, g mcp.Grant, raw json.Ra
 		}
 		return "Saved.", nil
 	}
-}
-
-// CheckEdit enforces the edit_spec rules on the grant: the chat of a feature,
-// an expert of its domain, a human (not generated) area, the specification
-// phase, and a gate that exists and is not approved.
-func CheckEdit(ctx context.Context, store specdata.Store, g mcp.Grant, area domain.Area) error {
-	if g.Mode != mcp.ModeSpec || g.ContextType != "feature" {
-		return &mcp.ToolError{Msg: "editing is only possible in the chat of a feature; ask the user to open it"}
-	}
-	if area.Generated() {
-		return &mcp.ToolError{Msg: "tech and qa are generated; call regenerate_gate with the user's comment instead"}
-	}
-	if !g.CanEditArea(area) {
-		return &mcp.ToolError{Msg: "the user is not an expert of this feature's domain"}
-	}
-	f, err := store.FeatureByUniqueID(ctx, g.Feature)
-	if errors.Is(err, specdata.ErrNotFound) {
-		return &mcp.ToolError{Msg: "feature not found"}
-	}
-	if err != nil {
-		return err
-	}
-	if f.Phase != domain.PhaseSpec {
-		return &mcp.ToolError{Msg: "the specification is read-only in phase " + string(f.Phase)}
-	}
-	gt, err := store.ActiveGate(ctx, f.ID, area)
-	if errors.Is(err, specdata.ErrNotFound) {
-		return &mcp.ToolError{Msg: fmt.Sprintf("the feature has no %s gate; the user can add it in the interface", area)}
-	}
-	if err != nil {
-		return err
-	}
-	if gt.Status == domain.GateApproved {
-		return &mcp.ToolError{Msg: "the gate is approved; the agent does not edit approved gates"}
-	}
-	return nil
 }
 
 // RevisionToolDescription is how the personal agent prepares a brief

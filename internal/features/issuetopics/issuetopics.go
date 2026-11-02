@@ -12,17 +12,16 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/GreenOnGrey/hammurapi-core/internal/apperr"
 	"github.com/GreenOnGrey/hammurapi-core/internal/cycledata"
 	"github.com/GreenOnGrey/hammurapi-core/internal/domain"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/nabuconn"
+	"github.com/GreenOnGrey/hammurapi-core/internal/features/topics"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/httpx"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/metrics"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/nabu"
@@ -30,18 +29,11 @@ import (
 )
 
 // MaxTitle bounds the title of a topic in Nabu.
-const MaxTitle = 120
+const MaxTitle = topics.MaxTitle
 
 // Title is the title of the topic of an issue: "<key> — <title>", at most
 // MaxTitle characters with an ellipsis (TP-10).
-func Title(key, title string) string {
-	t := key + " — " + strings.TrimSpace(title)
-	if utf8.RuneCountInString(t) <= MaxTitle {
-		return t
-	}
-	r := []rune(t)
-	return strings.TrimRight(string(r[:MaxTitle-1]), " ") + "…"
-}
+func Title(key, title string) string { return topics.Title(key, title) }
 
 // Service serves the topics of issues.
 type Service struct {
@@ -90,22 +82,12 @@ func (s *Service) prepare(ctx context.Context, p *domain.Principal, key string) 
 
 // ConversationOf returns the topic of the user for the issue ("" — none).
 func ConversationOf(ctx context.Context, q postgres.Querier, userID, issueID uuid.UUID) (string, error) {
-	var id uuid.UUID
-	err := q.QueryRow(ctx, `SELECT conversation_id FROM issue_topics WHERE user_id = $1 AND issue_id = $2`, userID, issueID).Scan(&id)
-	if postgres.IsNoRows(err) {
-		return "", nil
-	}
-	if err != nil {
-		return "", err
-	}
-	return id.String(), nil
+	return topics.Issue.ConversationOf(ctx, q, userID, issueID)
 }
 
 // Forget drops the link to a topic that is gone in Nabu.
 func Forget(ctx context.Context, q postgres.Querier, conversationID string) {
-	if _, err := q.Exec(ctx, `DELETE FROM issue_topics WHERE conversation_id = $1`, conversationID); err != nil {
-		slog.WarnContext(ctx, "forget the topic of an issue", "conversation_id", conversationID, "err", err)
-	}
+	topics.Issue.Forget(ctx, q, conversationID)
 }
 
 // Topic returns the topic of the user for the issue; a topic archived or gone
@@ -171,52 +153,7 @@ func (s *Service) Send(ctx context.Context, p *domain.Principal, key string, in 
 }
 
 func (s *Service) ensure(ctx context.Context, userID uuid.UUID, email string, is *cycledata.Issue) (string, error) {
-	var conv string
-	err := postgres.InTx(ctx, s.Pool, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('issue-topic:' || $1::text || ':' || $2::text, 0))`, userID, is.ID); err != nil {
-			return err
-		}
-		var err error
-		if conv, err = ConversationOf(ctx, tx, userID, is.ID); err != nil || conv != "" {
-			return err
-		}
-		c, err := s.Nabu.CreateTopic(ctx, email, Title(is.Key, is.Title))
-		if err != nil {
-			return nabuconn.MapErr(err)
-		}
-		if _, err := tx.Exec(ctx, `INSERT INTO issue_topics (user_id, issue_id, conversation_id) VALUES ($1,$2,$3)`, userID, is.ID, c.ID); err != nil {
-			return err
-		}
-		conv = c.ID
-		metrics.IssueTopicsCreated.Inc()
-		return nil
-	})
-	return conv, err
-}
-
-type link struct {
-	user uuid.UUID
-	conv string
-}
-
-// links lists the topics of an issue.
-func (s *Service) links(ctx context.Context, issueID uuid.UUID) ([]link, error) {
-	rows, err := s.Pool.Query(ctx, `SELECT user_id, conversation_id FROM issue_topics WHERE issue_id = $1`, issueID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var links []link
-	for rows.Next() {
-		var l link
-		var conv uuid.UUID
-		if err := rows.Scan(&l.user, &conv); err != nil {
-			return nil, err
-		}
-		l.conv = conv.String()
-		links = append(links, l)
-	}
-	return links, rows.Err()
+	return topics.Issue.Ensure(ctx, s.Pool, s.Nabu, userID, email, is.ID, Title(is.Key, is.Title), metrics.IssueTopicsCreated.Inc)
 }
 
 // Rename gives every topic of the issue its current key and title after a
@@ -230,23 +167,23 @@ func (s *Service) Rename(ctx context.Context, issueID uuid.UUID) {
 	if err != nil {
 		return
 	}
-	links, err := s.links(ctx, issueID)
+	links, err := topics.Issue.All(ctx, s.Pool, issueID)
 	if err != nil {
 		slog.WarnContext(ctx, "topics of an issue", "issue", is.Key, "err", err)
 		return
 	}
 	title := Title(is.Key, is.Title)
 	for _, l := range links {
-		email := s.Email(ctx, l.user)
+		email := s.Email(ctx, l.User)
 		if email == "" {
 			continue
 		}
-		err := s.Nabu.RenameTopic(ctx, email, l.conv, title)
+		err := s.Nabu.RenameTopic(ctx, email, l.Conv, title)
 		switch {
 		case nabu.IsNotFound(err):
-			Forget(ctx, s.Pool, l.conv)
+			Forget(ctx, s.Pool, l.Conv)
 		case err != nil:
-			slog.WarnContext(ctx, "rename the topic of an issue", "issue", is.Key, "conversation_id", l.conv, "err", err)
+			slog.WarnContext(ctx, "rename the topic of an issue", "issue", is.Key, "conversation_id", l.Conv, "err", err)
 		}
 	}
 }
@@ -263,28 +200,25 @@ func (s *Service) Archive(ctx context.Context, issueID uuid.UUID) {
 	if err != nil {
 		return
 	}
-	links, err := s.links(ctx, issueID)
+	links, err := topics.Issue.All(ctx, s.Pool, issueID)
 	if err != nil {
 		slog.WarnContext(ctx, "topics of an issue", "issue", is.Key, "err", err)
 		return
 	}
 	for _, l := range links {
-		err := errNoEmail
-		if email := s.Email(ctx, l.user); email != "" {
-			err = s.Nabu.ArchiveTopic(ctx, email, l.conv)
+		err := topics.ErrNoEmail
+		if email := s.Email(ctx, l.User); email != "" {
+			err = s.Nabu.ArchiveTopic(ctx, email, l.Conv)
 		}
 		if err != nil && !nabu.IsNotFound(err) {
 			metrics.IssueTopicsArchived.WithLabelValues("error").Inc()
-			slog.WarnContext(ctx, "archive the topic of an issue", "issue", is.Key, "conversation_id", l.conv, "err", err)
+			slog.WarnContext(ctx, "archive the topic of an issue", "issue", is.Key, "conversation_id", l.Conv, "err", err)
 			continue
 		}
 		metrics.IssueTopicsArchived.WithLabelValues("archived").Inc()
-		Forget(ctx, s.Pool, l.conv)
+		Forget(ctx, s.Pool, l.Conv)
 	}
 }
-
-// errNoEmail: the owner of a topic lost the email, Nabu is reached by it.
-var errNoEmail = errors.New("the user has no email")
 
 // Routes mounts the endpoints of the topic of an issue.
 func (s *Service) Routes(r chi.Router) {

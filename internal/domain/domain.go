@@ -117,6 +117,9 @@ const (
 	EventReset     GateEventType = "reset"
 	EventDeleted   GateEventType = "deleted"
 	EventGenerated GateEventType = "generated"
+	// EventChecked: the writer checked the gate after a change above it and
+	// changed nothing (FTR.HMR.DEV-0001 R22).
+	EventChecked GateEventType = "checked"
 )
 
 // IssueType is Idea or Problem.

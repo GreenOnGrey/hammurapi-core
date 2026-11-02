@@ -117,6 +117,7 @@ type Config struct {
 	WorkflowLease       time.Duration
 	WorkflowDispatchers int // effects of workflows run at once (FTR.HMR.CMN-0002 arch §5.2)
 	DiscoveryTimeout    time.Duration
+	WriterTimeout       time.Duration
 
 	// FTR.HMR.CMN-0005: the check of the specification repository and the navigator.
 	SpecScanPushDebounce    time.Duration
@@ -211,6 +212,9 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if c.WorkflowDispatchers, err = envInt("WORKFLOW_DISPATCHERS", 4); err != nil {
+		return nil, err
+	}
+	if c.WriterTimeout, err = envDuration("WRITER_TIMEOUT", 30*time.Minute); err != nil {
 		return nil, err
 	}
 	if c.DiscoveryTimeout, err = envDuration("DISCOVERY_TIMEOUT", 20*time.Minute); err != nil {

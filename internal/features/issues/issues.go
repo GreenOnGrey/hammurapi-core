@@ -20,6 +20,7 @@ import (
 	"github.com/GreenOnGrey/hammurapi-core/internal/domain"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/discovery"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/features"
+	"github.com/GreenOnGrey/hammurapi-core/internal/features/gategen"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/events"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/httpx"
 	"github.com/GreenOnGrey/hammurapi-core/internal/specdata"
@@ -347,6 +348,10 @@ func (s *Service) Accept(ctx context.Context, p *domain.Principal, key string, i
 			return err
 		}
 		featureKey = f.UniqueID
+		// FTR.HMR.DEV-0001 R2: the writer starts on product at once
+		if err := (gategen.Generator{Q: tx.Q()}).Write(ctx, f, []domain.Area{domain.AreaProduct}, p.UserID); err != nil {
+			return err
+		}
 		return tcd.AddActivity(ctx, "issue", is.ID, "accepted", &p.UserID, false, map[string]any{"feature": f.UniqueID})
 	})
 	if err != nil {

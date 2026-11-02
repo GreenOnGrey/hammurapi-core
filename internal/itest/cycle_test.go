@@ -62,6 +62,7 @@ func (m *countingMachine) Step(ctx context.Context, tx pgx.Tx, run *workflows.Ru
 func drain(t *testing.T, e *workflows.Engine) {
 	t.Helper()
 	ctx := context.Background()
+	idle := 0
 	for i := 0; i < 500; i++ {
 		worked, err := e.ProcessOnce(ctx)
 		if err != nil {
@@ -71,9 +72,15 @@ func drain(t *testing.T, e *workflows.Engine) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !worked && !sent {
+		if worked || sent {
+			idle = 0
+			continue
+		}
+		// settled only after a few idle rounds: a run due "now" may not be due yet by the clock of the database
+		if idle++; idle == 3 {
 			return
 		}
+		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatal("workflows did not settle")
 }

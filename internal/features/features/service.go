@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -31,6 +32,14 @@ type Service struct {
 	tokens        git.TokenSource
 	events        events.Publisher
 	defaultBranch string
+
+	// Writer and OpenCounts read the writer of specifications (FTR.HMR.DEV-0001);
+	// Closed archives the topics of a deleted feature (FTR.HMR.DEV-0001 R20).
+	Writer     func(ctx context.Context, featureID uuid.UUID) (*WriterRun, error)
+	OpenCounts func(ctx context.Context, featureID uuid.UUID) (map[domain.Area]int, error)
+	Closed     func(ctx context.Context, featureID uuid.UUID)
+	// Unlocked wakes a run that waits for the end of an edit (FTR.HMR.DEV-0001 R25).
+	Unlocked func(ctx context.Context, featureID uuid.UUID)
 }
 
 // NewService creates the service.
@@ -183,9 +192,11 @@ func (s *Service) CreateFromIssue(ctx context.Context, tx specdata.Store, p *dom
 	if in.Measure != nil {
 		metric, _ = json.Marshal(in.Measure)
 	}
+	stageProduct := string(domain.AreaProduct)
 	f := &specdata.Feature{UniqueID: uid, SystemID: sys.ID, DomainKey: sys.DomainKey, SystemKey: sys.Key,
 		ApprovalRequired: sys.ApprovalRequired, Number: n, Title: title, Branch: branch, PRNumber: pr.Number, PRURL: pr.URL,
-		Phase: domain.PhaseSpec, IsProblem: in.IsProblem, Metric: metric, CreatedBy: p.UserID, CreatedByName: p.DisplayName}
+		Phase: domain.PhaseSpec, IsProblem: in.IsProblem, Metric: metric, CreatedBy: p.UserID, CreatedByName: p.DisplayName,
+		SpecFlow: specdata.FlowWriter, SpecStage: &stageProduct} // FTR.HMR.DEV-0001 R2
 	if in.Parent != nil {
 		f.ParentID, f.ParentUniqueID = &in.Parent.ID, &in.Parent.UniqueID
 	}
@@ -238,7 +249,39 @@ type Card struct {
 	CreatedBy        string                `json:"createdBy"`
 	CreatedAt        time.Time             `json:"createdAt"`
 	Permissions      Permissions           `json:"permissions"`
+	// FTR.HMR.DEV-0001: the stages of the specification and the writer.
+	SpecFlow      string              `json:"specFlow"`
+	SpecStage     *string             `json:"specStage"`
+	SkippedAreas  []string            `json:"skippedAreas"`
+	WriterRun     *WriterRun          `json:"writerRun"`
+	OpenQuestions map[domain.Area]int `json:"openQuestions"`
 }
+
+// States of a run of the writer in progress.
+const (
+	RunQueued     = "queued"
+	RunGenerating = "generating"
+)
+
+// WriterRun is the run of the writer in progress (FTR.HMR.DEV-0001 arch §4.1).
+type WriterRun struct {
+	Mode  string        `json:"mode"`
+	State string        `json:"state"` // RunQueued, RunGenerating
+	Areas []domain.Area `json:"areas"`
+	// WaitingLock: the run waits for the end of a manual edit (FTR.HMR.DEV-0001 R25).
+	WaitingLock bool `json:"waitingLock"`
+}
+
+// Touches reports whether the run writes the area.
+func (r *WriterRun) Touches(a domain.Area) bool {
+	if r == nil {
+		return false
+	}
+	return slices.Contains(r.Areas, a)
+}
+
+// ErrSpecRunActive refuses what would collide with a run of the writer (FTR.HMR.DEV-0001 R25).
+var ErrSpecRunActive = apperr.Conflict("spec_run_active", "the writer is working on this document")
 
 // ServiceRef is an affected service.
 type ServiceRef struct {
@@ -263,15 +306,20 @@ type PRRef struct {
 
 // Permissions tells the UI which actions the current user has.
 type Permissions struct {
-	Edit       []domain.Area `json:"edit"`
-	Submit     []domain.Area `json:"submit"`
-	Approve    []domain.Area `json:"approve"`
+	Edit    []domain.Area `json:"edit"`
+	Submit  []domain.Area `json:"submit"`
+	Approve []domain.Area `json:"approve"`
+	// DeleteGate, AddGate and Regenerate stay empty until the web that reads them is gone (FTR.HMR.DEV-0001 R30).
 	DeleteGate []domain.Area `json:"deleteGate"`
 	AddGate    []domain.Area `json:"addGate"`
 	Regenerate bool          `json:"regenerate"`
-	Codegen    bool          `json:"codegen"`
-	Delete     bool          `json:"delete"`
-	SetFlag    bool          `json:"setFlag"`
+	// Advance is «Next stage» in a domain without approval, Request gives instructions to the writer.
+	Advance bool `json:"advance"`
+	Request bool `json:"request"`
+	Retry   bool `json:"retry"`
+	Codegen bool `json:"codegen"`
+	Delete  bool `json:"delete"`
+	SetFlag bool `json:"setFlag"`
 }
 
 // Get builds the feature card.
@@ -329,6 +377,26 @@ func (s *Service) Get(ctx context.Context, p *domain.Principal, uniqueID string)
 		return nil, err
 	}
 	c.Permissions = PermissionsOf(p, f, gates)
+	c.SpecFlow, c.SpecStage, c.SkippedAreas, c.OpenQuestions = f.SpecFlow, f.SpecStage, f.SkippedAreas, map[domain.Area]int{}
+	if c.SkippedAreas == nil {
+		c.SkippedAreas = []string{}
+	}
+	if s.Writer != nil {
+		if c.WriterRun, err = s.Writer(ctx, f.ID); err != nil {
+			return nil, err
+		}
+		if c.WriterRun != nil { // FTR.HMR.DEV-0001 R25: what the run writes is read-only
+			c.Permissions.Edit = slices.DeleteFunc(c.Permissions.Edit, c.WriterRun.Touches)
+			c.Permissions.Submit = slices.DeleteFunc(c.Permissions.Submit, c.WriterRun.Touches)
+			c.Permissions.Approve = slices.DeleteFunc(c.Permissions.Approve, c.WriterRun.Touches)
+		}
+	}
+	c.Permissions.Retry = c.Permissions.Request && c.Workflow != nil && c.Workflow.State == "blocked"
+	if s.OpenCounts != nil {
+		if c.OpenQuestions, err = s.OpenCounts(ctx, f.ID); err != nil {
+			return nil, err
+		}
+	}
 	return c, nil
 }
 
@@ -383,13 +451,11 @@ func PermissionsOf(p *domain.Principal, f *specdata.Feature, gates []specdata.Ga
 		return perm
 	}
 	active := map[domain.Area]bool{}
+	perm.Request = true
 	for _, g := range gates {
 		active[g.Area] = true
 		if !g.Generated {
 			perm.Edit = append(perm.Edit, g.Area)
-			if g.Area != domain.AreaProduct {
-				perm.DeleteGate = append(perm.DeleteGate, g.Area)
-			}
 		}
 		if f.ApprovalRequired && g.Status == domain.GateDraft {
 			perm.Submit = append(perm.Submit, g.Area)
@@ -398,13 +464,13 @@ func PermissionsOf(p *domain.Principal, f *specdata.Feature, gates []specdata.Ga
 			perm.Approve = append(perm.Approve, g.Area)
 		}
 	}
-	for _, a := range []domain.Area{domain.AreaDesign, domain.AreaArch} {
-		if !active[a] {
-			perm.AddGate = append(perm.AddGate, a)
+	if !f.ApprovalRequired { // FTR.HMR.DEV-0001 R7
+		if f.SpecFlow == specdata.FlowWriter {
+			perm.Advance = f.SpecStage != nil && *f.SpecStage != specdata.StageGenerated
+		} else {
+			perm.Advance = !active[domain.AreaTech]
 		}
 	}
-	// Without the agent nothing is generated (FTR.HMR.CMN-0006 R9).
-	perm.Regenerate = !f.ApprovalRequired || HumanGatesApproved(gates)
 	perm.Codegen = ReadyForCodegen(f, gates)
 	return perm
 }
@@ -492,6 +558,9 @@ func (s *Service) Delete(ctx context.Context, p *domain.Principal, uniqueID, con
 		return tx.DropLock(ctx, f.ID)
 	}); err != nil {
 		return err
+	}
+	if s.Closed != nil {
+		s.Closed(context.WithoutCancel(ctx), f.ID)
 	}
 	s.events.Publish(ctx, events.Event{Type: events.FeatureDeleted, Data: map[string]string{"uniqueId": f.UniqueID}})
 	s.events.Publish(ctx, events.Event{Type: events.FocusChanged, Data: map[string]string{"uniqueId": f.UniqueID}})
@@ -628,6 +697,19 @@ func (s *Service) Lock(ctx context.Context, p *domain.Principal, uniqueID string
 	if err := RequireExpert(p, f.DomainKey); err != nil {
 		return nil, err
 	}
+	if s.Writer != nil { // FTR.HMR.DEV-0001 R25: a run that waits for the end of an edit gets no new one
+		run, err := s.Writer(ctx, f.ID)
+		if err != nil {
+			return nil, err
+		}
+		if run != nil && run.State == RunQueued {
+			if cur, err := s.store.GetLock(ctx, f.ID); err != nil {
+				return nil, err
+			} else if cur == nil || cur.LockedBy != p.UserID {
+				return nil, ErrSpecRunActive
+			}
+		}
+	}
 	l, ok, err := s.store.AcquireLock(ctx, f.ID, p.UserID)
 	if err != nil {
 		return nil, err
@@ -651,7 +733,13 @@ func (s *Service) Unlock(ctx context.Context, p *domain.Principal, uniqueID stri
 	if err != nil {
 		return err
 	}
-	return s.store.ReleaseLock(ctx, f.ID, p.UserID)
+	if err := s.store.ReleaseLock(ctx, f.ID, p.UserID); err != nil {
+		return err
+	}
+	if s.Unlocked != nil {
+		s.Unlocked(ctx, f.ID)
+	}
+	return nil
 }
 
 // List returns the Development stage feature list.
