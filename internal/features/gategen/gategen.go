@@ -129,6 +129,15 @@ func (g Generator) AfterApproval(ctx context.Context, f *specdata.Feature, area 
 	return nil
 }
 
+// adoptStages puts a feature without stages on the stages of the writer (R31).
+func (g Generator) adoptStages(ctx context.Context, f *specdata.Feature, stage string) error {
+	if _, err := g.Q.Exec(ctx, `UPDATE features SET spec_flow = $2, spec_stage = $3 WHERE id = $1`, f.ID, specdata.FlowWriter, stage); err != nil {
+		return err
+	}
+	f.SpecFlow, f.SpecStage = specdata.FlowWriter, &stage
+	return nil
+}
+
 // advance moves the feature to its next stage and starts the writer on it.
 func (g Generator) advance(ctx context.Context, f *specdata.Feature, initiator uuid.UUID) error {
 	next := NextStage(stageOf(f), f.SkippedAreas)
@@ -820,6 +829,7 @@ Questions:
 - product: scenarios, rules, scope, roles and rights, thresholds, edge cases, what success is. Not screens, API, storage, sources of data.
 - design: screens, states, texts, trade-offs of usability. Not the rules of the product unless they contradict, not contracts.
 - The boundary of product and design covers their text as well as their questions: no tables, columns, queries, services, API paths or names of code, even when Discovery or the previous revision has them. A technical decision of Discovery waits for arch: do not carry it. Remove such text from a revision, unless an expert wrote it by hand or an instruction asks for exactly that text. Preferences in the context of a brief do not move the boundary.
+- Metrics of product: Source and Query come only from Discovery. Without them leave the cells empty and do not ask: arch decides them and writes them in its own document.
 - Test of a question of product or design: a product expert answers it from the behavior for users, without knowing the code or the data. If not, it is not a question there: drop it, even an open one, and leave the decision to arch.
 - arch: boundaries of services, contracts, data, compatibility, rollout. Not details of implementation that tech chooses.
 - Ask only if the answer changes the document. Every question has a recommendation and why. Up to 10 questions per round and 5 rounds per gate. A round after the first only follows the answers: no new topics. Stop asking when the document is clear: no questions is the expected end.

@@ -468,7 +468,7 @@ func PermissionsOf(p *domain.Principal, f *specdata.Feature, gates []specdata.Ga
 		if f.SpecFlow == specdata.FlowWriter {
 			perm.Advance = f.SpecStage != nil && *f.SpecStage != specdata.StageGenerated
 		} else {
-			perm.Advance = !active[domain.AreaTech]
+			perm.Advance = !active[domain.AreaTech] || !active[domain.AreaArch]
 		}
 	}
 	perm.Codegen = ReadyForCodegen(f, gates)

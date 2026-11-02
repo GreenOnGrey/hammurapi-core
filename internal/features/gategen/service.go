@@ -125,6 +125,17 @@ func (s *Service) AnswerQuestions(ctx context.Context, p *domain.Principal, key 
 	return enqueue(ctx, s.Pool, nr)
 }
 
+// legacyStage is the stage a feature without stages has reached: its last
+// written gate, "" — none.
+func legacyStage(all []specdata.Gate) string {
+	for _, a := range []domain.Area{domain.AreaArch, domain.AreaDesign, domain.AreaProduct} {
+		if slices.ContainsFunc(all, func(g specdata.Gate) bool { return g.Area == a }) {
+			return string(a)
+		}
+	}
+	return ""
+}
+
 // Advance is «Next stage» in a domain without approval (R7).
 func (s *Service) Advance(ctx context.Context, p *domain.Principal, key string) (string, error) {
 	f, err := features.Load(ctx, s.Store, key)
@@ -157,11 +168,20 @@ func (s *Service) Advance(ctx context.Context, p *domain.Principal, key string) 
 	if err != nil {
 		return "", err
 	}
-	if f.SpecFlow != specdata.FlowWriter { // R31: tech and qa of a feature without stages
-		if len(features.PendingGenerated(all)) == 0 {
-			return "", apperr.Conflict("no_next_stage", "the specification has no next stage")
+	if f.SpecFlow != specdata.FlowWriter {
+		stage := legacyStage(all)
+		if stage == string(domain.AreaArch) { // R31: only tech and qa are left
+			if len(features.PendingGenerated(all)) == 0 {
+				return "", apperr.Conflict("no_next_stage", "the specification has no next stage")
+			}
+			return specdata.StageGenerated, gen.Generate(ctx, f, []domain.Area{domain.AreaTech, domain.AreaQA}, p.UserID)
 		}
-		return specdata.StageGenerated, gen.Generate(ctx, f, []domain.Area{domain.AreaTech, domain.AreaQA}, p.UserID)
+		if stage == "" {
+			return "", apperr.Conflict("gate_not_written", "the gate of the stage is not written: answer the question of the writer or retry")
+		}
+		if err := gen.adoptStages(ctx, f, stage); err != nil { // R31: the button is the decision of an expert
+			return "", err
+		}
 	}
 	stage := stageOf(f)
 	if stage == specdata.StageGenerated {

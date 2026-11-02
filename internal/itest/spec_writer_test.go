@@ -604,6 +604,41 @@ func TestSpecWriterLegacy(t *testing.T) {
 	}
 }
 
+// MG-06, MG-07: «Next stage» of an old feature goes through the gates it has not reached.
+func TestSpecWriterLegacyAdvance(t *testing.T) {
+	r := newSpecRig(t)
+	ctx := context.Background()
+	f := r.feature(false)
+	must(t, r.gen.Write(ctx, f, []domain.Area{domain.AreaProduct}, r.anna.UserID))
+	r.run()
+	_, err := pool.Exec(ctx, `UPDATE features SET spec_flow = 'legacy', spec_stage = NULL WHERE id = $1`, f.ID)
+	must(t, err)
+	runs := len(r.runs)
+	stage, err := r.svc.Advance(ctx, r.anna, f.UniqueID)
+	must(t, err)
+	r.run()
+	if stage != "design" || len(r.runs) != runs+1 || r.runs[runs].Mode != gategen.ModeWrite || r.runs[runs].Areas[0] != domain.AreaDesign {
+		t.Fatalf("stage %q runs %+v", stage, r.runs[runs:])
+	}
+	if got := r.reload(f); got.SpecFlow != specdata.FlowWriter || got.SpecStage == nil || *got.SpecStage != "design" {
+		t.Fatalf("%+v", got)
+	}
+
+	// with arch written only tech and qa are left, as before
+	_, err = pool.Exec(ctx, `UPDATE features SET spec_flow = 'legacy', spec_stage = NULL WHERE id = $1`, f.ID)
+	must(t, err)
+	seed := r.reload(f)
+	must(t, r.gen.Write(ctx, seed, []domain.Area{domain.AreaArch}, r.anna.UserID))
+	r.run()
+	runs = len(r.runs)
+	stage, err = r.svc.Advance(ctx, r.anna, f.UniqueID)
+	must(t, err)
+	r.run()
+	if stage != specdata.StageGenerated || r.runs[runs].Mode != gategen.ModeGenerate {
+		t.Fatalf("stage %q runs %+v", stage, r.runs[runs:])
+	}
+}
+
 // TP-01, TP-02, TP-05, TP-06, TP-09, TP-10: the topic of a feature.
 func TestFeatureTopics(t *testing.T) {
 	r := newSpecRig(t)
