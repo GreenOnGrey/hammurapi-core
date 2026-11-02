@@ -790,7 +790,7 @@ func Prompt(f *specdata.Feature, req Request, d PromptData) string {
 		if q, ok := d.Questions[a]; ok && mode == ModeWrite {
 			fmt.Fprintf(&b, "\n=== Open questions of %s (round %d, %d rounds left) ===\n", a, q.Round, q.RoundsLeft())
 			for _, x := range q.Questions {
-				fmt.Fprintf(&b, "- %s: %s. Recommended: %s\n", x.ID, x.Title, x.Recommended)
+				fmt.Fprintf(&b, "- %s (for the %s experts): %s. Recommended: %s\n", x.ID, audienceOf(a, x), x.Title, x.Recommended)
 			}
 		}
 		if t, ok := d.Templates[a]; ok {
@@ -816,12 +816,14 @@ func Prompt(f *specdata.Feature, req Request, d PromptData) string {
 const writeRules = `
 Write the full document by the rules template now, even if something is unclear: mark what you assumed in the text as "(допущение, см. Qn)" and ask about it in questions of submit_gate. Do not wait for answers: they start your next run.
 Questions:
-- Find facts yourself: specifications (spec_* tools), Discovery, the code of services. Ask the experts only decisions.
-- product: scenarios, rules, scope, roles and rights, thresholds, edge cases, metrics. Not screens, API, storage, sources of data.
+- Find facts yourself: specifications (spec_* tools), Discovery; arch, tech and qa also the code of services. Ask the experts only decisions.
+- product: scenarios, rules, scope, roles and rights, thresholds, edge cases, what success is. Not screens, API, storage, sources of data.
 - design: screens, states, texts, trade-offs of usability. Not the rules of the product unless they contradict, not contracts.
+- The boundary of product and design covers their text as well as their questions: no tables, columns, queries, services, API paths or names of code, even when Discovery or the previous revision has them. A technical decision of Discovery waits for arch: do not carry it. Remove such text from a revision, unless an expert wrote it by hand or an instruction asks for exactly that text. Preferences in the context of a brief do not move the boundary.
+- Test of a question of product or design: a product expert answers it from the behavior for users, without knowing the code or the data. If not, it is not a question there: drop it, even an open one, and leave the decision to arch.
 - arch: boundaries of services, contracts, data, compatibility, rollout. Not details of implementation that tech chooses.
 - Ask only if the answer changes the document. Every question has a recommendation and why. Up to 10 questions per round and 5 rounds per gate. A round after the first only follows the answers: no new topics. Stop asking when the document is clear: no questions is the expected end.
-- To keep a still open question, pass its id again. A question with a recommendation that depends on another open question waits for the next round.
+- To keep a still open question that passes the test, pass its id again. A question with a recommendation that depends on another open question waits for the next round.
 - product and design ask no technical experts: a technical uncertainty is not a question there. Take an assumption in the text and leave the decision to arch.
 - arch sets audience product when the product experts decide the question. Any gate sets touches when the answer may change another gate: the expert decides whether to allow that change.
 Other gates: you may submit another gate only when a brief names it or an expert allowed it with an answer. If you see a problem in another gate, do not change it: ask a question with touches naming it.
@@ -836,7 +838,7 @@ const searchRules = `
 Documents are found by full-text search and read by section (spec_search, spec_read, spec_requirements, spec_references):
 - Requirements exactly as **R<n>.** with a list of criteria "Дано …, когда …, тогда …".
 - Refer to another feature or its requirement by the full key: FTR.FMS.CAR-0002, FTR.FMS.CAR-0002-R3. Within this feature R<n> is enough.
-- Name services, screens, API paths, events and tables literally, the way people will search for them.
+- Name things literally, the way people will search for them: roles and screens in product and design; also services, API paths, events and tables in arch, tech and qa.
 - Group a long list under headings of level 3: a section is the unit of reading. Keep the headings of the template.
 - Mockups are not indexed: everything that matters is in the text of the document.
 `

@@ -44,6 +44,11 @@ func TestNumberQuestions(t *testing.T) {
 	if ids(second) != "Q2/1 Q4/2 Q5/2" || c2 != (QuestionCounters{Seq: 5, Round: 2}) {
 		t.Fatalf("second round: %s %+v", ids(second), c2)
 	}
+	// keeping a question does not change who answers it
+	tech := []Question{{ID: "Q1", QuestionText: QuestionText{Title: "a", Audience: "technical"}}}
+	if kept, _, _ := NumberQuestions(tech, QuestionCounters{Seq: 1, Round: 1}, []QuestionInput{q("Q1", "a")}); kept[0].Audience != "technical" {
+		t.Fatalf("audience lost: %+v", kept)
+	}
 	// only questions asked again: no new round begins
 	if _, again, _ := NumberQuestions(second, c2, []QuestionInput{q("Q4", "d")}); again != c2 {
 		t.Fatalf("asked again: %+v", again)

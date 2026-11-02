@@ -30,8 +30,10 @@ func TestCheckSubmission(t *testing.T) {
 		{"another gate", map[string]any{"area": "product", "content": "# P"}, "not allowed in this run"},
 		{"no scope words", map[string]any{"area": "arch"}, "content is required"},
 		{"skip", map[string]any{"area": "design", "questions": []map[string]any{{"title": "Нужен ли дизайн?", "recommended": "x", "skipArea": "design"}}}, ""},
-		// QS-16: technical questions wait for arch; product questions on arch are fine.
+		// QS-16, QS-18: technical questions wait for arch; product questions on arch are fine.
 		{"technical question on design", map[string]any{"area": "design", "content": "# D", "questions": []map[string]any{{"title": "Где хранить?", "recommended": "x", "audience": "technical"}}}, "does not ask technical experts"},
+		{"code name in a question of design", map[string]any{"area": "design", "content": "# D", "questions": []map[string]any{{"title": "Порог", "body": "Читаем last_check_at?", "recommended": "x"}}}, "names last_check_at"},
+		{"code name on arch", map[string]any{"area": "arch", "content": "# A", "questions": []map[string]any{{"title": "Индекс на last_check_at?", "recommended": "x"}}}, ""},
 		{"product question on arch", map[string]any{"area": "arch", "content": "# A", "questions": []map[string]any{{"title": "Порог?", "recommended": "x", "audience": "product"}}}, ""},
 		{"check out of a check", map[string]any{"area": "arch", "unchanged": true}, "for a check"},
 		{"conflicts of arch", map[string]any{"area": "arch", "content": "# A", "conflicts": "x"}, "for tech and qa"},

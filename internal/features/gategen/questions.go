@@ -89,6 +89,10 @@ func updateQuestions(ctx context.Context, tx pgx.Tx, f *specdata.Feature, req Re
 		if submitted && req.mode() == ModeWrite {
 			inputs := make([]cycledata.QuestionInput, 0, len(s.Questions))
 			for _, qi := range s.Questions {
+				if area.ApproverKind() == domain.ExpertProduct && isTechnical(open, qi.ID) { // R11: it waits for arch
+					slog.WarnContext(ctx, "technical question of the writer closed", "feature", f.UniqueID, "area", area, "question", qi.ID)
+					continue
+				}
 				if qi.SkipArea != "" { // R6: what an answer does is decided by the server
 					qi.SkipArea = string(area)
 					qi.Options = []string{OptionSkip, OptionDo}
@@ -137,6 +141,11 @@ func (g Generator) OpenCounts(ctx context.Context, featureID uuid.UUID) (map[dom
 		}
 	}
 	return out, rows.Err()
+}
+
+func isTechnical(open []cycledata.Question, id string) bool {
+	q, ok := findQuestion(open, id)
+	return ok && domain.ExpertKind(q.Audience) == domain.ExpertTechnical
 }
 
 func audienceOf(area domain.Area, q cycledata.Question) domain.ExpertKind {

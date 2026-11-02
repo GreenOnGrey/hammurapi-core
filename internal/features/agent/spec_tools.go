@@ -60,6 +60,9 @@ func CheckSubmission(w *mcp.WriterScope, raw json.RawMessage) string {
 			if domain.ExpertKind(q.Audience) == domain.ExpertTechnical {
 				return fmt.Sprintf("%s does not ask technical experts: take an assumption in the text, arch decides it", in.Area)
 			}
+			if name := technicalName(q.QuestionText); name != "" {
+				return fmt.Sprintf("Question %q names %s: a product expert answers without knowing the code or the data. Ask about behavior in plain words, or leave the decision to arch", q.Title, name)
+			}
 		}
 	}
 	if in.Conflicts != "" && !in.Area.Generated() {
@@ -80,6 +83,15 @@ func CheckSubmission(w *mcp.WriterScope, raw json.RawMessage) string {
 		}
 	}
 	return "content is required, unless the gate proposes to skip itself with a question with skipArea"
+}
+
+// technicalNameRe is a name of code or data: catalog_usage_daily, LAST_CHECK_AT.
+var technicalNameRe = regexp.MustCompile(`\b[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9_]*[A-Za-z0-9]\b`)
+
+// technicalName finds such a name in a question. It only catches the obvious
+// case; the boundary of a gate is mostly on the prompt.
+func technicalName(q cycledata.QuestionText) string {
+	return technicalNameRe.FindString(strings.Join(append([]string{q.Title, q.Body, q.Recommended, q.Why}, q.Options...), " "))
 }
 
 // Bounds of a submitted file (R8).

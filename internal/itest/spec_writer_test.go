@@ -248,7 +248,7 @@ func TestSpecWriterAnswers(t *testing.T) {
 				{QuestionText: cycledata.QuestionText{Title: "Три", Recommended: "да", Audience: "technical"}},
 			}
 		} else {
-			s.Questions = []cycledata.QuestionInput{{ID: "Q2", QuestionText: cycledata.QuestionText{Title: "Два", Recommended: "да"}}, {ID: "Q3", QuestionText: cycledata.QuestionText{Title: "Три", Recommended: "да", Audience: "technical"}}}
+			s.Questions = []cycledata.QuestionInput{{ID: "Q2", QuestionText: cycledata.QuestionText{Title: "Два", Recommended: "да"}}, {ID: "Q3", QuestionText: cycledata.QuestionText{Title: "Три", Recommended: "да"}}}
 		}
 		return gategen.Generated{Commits: map[domain.Area]string{domain.AreaProduct: "c" + uuid.NewString()[:6]}, Results: map[domain.Area]gategen.Submission{domain.AreaProduct: s}}, nil
 	}
@@ -271,12 +271,13 @@ func TestSpecWriterAnswers(t *testing.T) {
 	}
 	qs, err := gategen.LoadQuestions(ctx, pool, f.ID, domain.AreaProduct)
 	must(t, err)
-	if len(qs.Questions) != 2 || qs.Questions[0].ID != "Q2" || qs.Questions[1].Audience != "technical" {
+	// QS-17: a technical question kept on product closes, even without its audience in the call
+	if len(qs.Questions) != 1 || qs.Questions[0].ID != "Q2" {
 		t.Fatalf("%+v", qs)
 	}
 	counts, err := r.gen.OpenCounts(ctx, f.ID)
 	must(t, err)
-	if counts[domain.AreaProduct] != 2 {
+	if counts[domain.AreaProduct] != 1 {
 		t.Fatalf("%v", counts)
 	}
 }

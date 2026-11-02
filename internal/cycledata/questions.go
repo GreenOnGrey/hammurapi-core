@@ -124,6 +124,9 @@ func NumberQuestions(prev []Question, c QuestionCounters, in []QuestionInput) (o
 		id := QuestionID(qi.ID)
 		if p, ok := asked[id]; ok {
 			q.ID, q.Round = p.ID, p.Round
+			if q.Audience == "" { // keeping a question does not change who answers it
+				q.Audience = p.Audience
+			}
 			delete(asked, id) // a second question with the number is new
 		} else {
 			if !begun && next.Round >= MaxRounds {
