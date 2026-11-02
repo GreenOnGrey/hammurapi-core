@@ -755,7 +755,7 @@ func Prompt(f *specdata.Feature, req Request, d PromptData) string {
 			"A gate that has to change: submit its full markdown with changeSummary. A gate with nothing to change: submit_gate with unchanged: true and no content. Ask no questions.\n")
 	default:
 		fmt.Fprintf(&b, "\nGenerate the %s specification(s) from the gates below, the rules templates and the code of the affected services. You ask no questions: "+
-			"a contradiction or a gap in product, design or arch does not stop you: take an assumption, write the problem under \"Открытые вопросы\" of the document and repeat it in conflicts of submit_gate.\n", strings.Join(areas, " and "))
+			"a contradiction or a gap in product, design or arch does not stop you: take an assumption, write the problem under \"Открытые вопросы\" of the document and repeat it in conflicts of submit_gate. Remove that section when there is nothing to write.\n", strings.Join(areas, " and "))
 		b.WriteString("Requirements of the product specification have IDs R<n>. The tech specification must contain a table of changes by service " +
 			"with columns Service | Changes | Requirements (service keys exactly as in the catalog). The qa specification must contain a table of test " +
 			"cases with columns ID | Requirements | Scenario | Expected result | Level (U, I or E); every requirement needs a test case.\n")
@@ -826,7 +826,7 @@ Questions:
 - arch sets audience product when the product experts decide the question. Any gate sets touches when the answer may change another gate: the expert decides whether to allow that change.
 Other gates: you may submit another gate only when a brief names it or an expert allowed it with an answer. If you see a problem in another gate, do not change it: ask a question with touches naming it.
 Manual revisions of experts in the documents stay unless a brief says otherwise.
-Carry answers and decisions to the section "Принятые решения" with the reason. Leave the section "Открытые вопросы" empty: the server fills it. Remove the hints of the template from the document.
+Carry answers and decisions to the section "Принятые решения" with the reason. Do not write the section "Открытые вопросы" and remove it if the document has it: the server adds it when the gate is submitted with open questions. Remove the hints of the template from the document.
 design also has a mockup: call submit_gate_file with mockups.html: a single self-contained page of the screens, light and dark theme, color-scheme declared in each, no network dependencies except fonts.
 A gate that is not needed (only design and arch): submit_gate without content with one question whose skipArea is this area, with why. The experts decide.
 `

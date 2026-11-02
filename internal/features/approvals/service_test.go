@@ -161,10 +161,10 @@ func TestSubmitWithOpenQuestions(t *testing.T) {
 	_, err := f.svc.Submit(context.Background(), tu.User("expert:FMS:product"), feat.UniqueID, domain.AreaDesign, false, false)
 	tu.Code(t, err, 409, "open_questions")
 
-	f.git.EXPECT().GetFile(gomock.Any(), "tok", feat.Branch, gomock.Any()).Return(&git.File{Content: []byte("# Дизайн\n\n## Открытые вопросы\n")}, nil)
+	f.git.EXPECT().GetFile(gomock.Any(), "tok", feat.Branch, gomock.Any()).Return(&git.File{Content: []byte("# Дизайн\n")}, nil)
 	f.git.EXPECT().Commit(gomock.Any(), "tok", feat.Branch, gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, _, _, msg string, ch []git.FileChange) (string, error) {
-			if !strings.Contains(string(ch[0].Content), "**Q3.** Порог") || !strings.Contains(msg, "Generated") {
+			if !strings.Contains(string(ch[0].Content), "## Открытые вопросы\n\n- **Q3.** Порог") || !strings.Contains(msg, "Generated") {
 				t.Fatalf("commit %q: %s", msg, ch[0].Content)
 			}
 			return "with-questions", nil
