@@ -186,7 +186,7 @@ func TestSubmitWarnsUnnumberedRequirements(t *testing.T) {
 	feat := tu.Feature(true)
 	f.feature(feat, tu.Gate(feat, domain.AreaProduct, domain.GateDraft))
 	f.git.EXPECT().GetFile(gomock.Any(), "tok", feat.Branch, "specs/FMS/CAR/FTR.FMS.CAR-0005/product/spec.md").
-		Return(&git.File{Content: []byte("# T\n\n## Requirements\n\n**R1.** Numbered.\n- Given x, when y, then z.\n\n- The user sees a list.\n- Given a, when b, then c.\n")}, nil)
+		Return(&git.File{Content: []byte("# T\n\n## Requirements\n\n- The user sees a list.\n- Given a, when b, then c.\n\n**R1.** Numbered.\n- Given x, when y, then z.\n")}, nil)
 	_, err := f.svc.Submit(context.Background(), tu.User("expert:FMS:product"), feat.UniqueID, domain.AreaProduct, false, false)
 	tu.Code(t, err, 409, "requirements_without_id")
 	f.store.EXPECT().SaveGate(gomock.Any(), gomock.Any()).Return(nil)

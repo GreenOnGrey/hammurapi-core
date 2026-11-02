@@ -279,11 +279,22 @@ type Requirement struct {
 
 var (
 	reqRe       = regexp.MustCompile(`^\*\*(R\d+)\.\*\*\s*(.*)$`)
+	reqTitledRe = regexp.MustCompile(`^\*\*(R\d+)\.\s+([^*]+)\*\*\s*(.*)$`) // **R1. Title.** Text.
 	listItemRe  = regexp.MustCompile(`^\s*(?:[-*+]|\d+[.)])\s+(.*)$`)
 	criterionRe = regexp.MustCompile(`^(?i)(Дано|Given)[\s,:]`) // \b is ASCII-only in RE2
 )
 
-// Requirements extracts **R<n>.** paragraphs: the text up to the first list or
+func reqLine(s string) (id, text string, ok bool) {
+	if m := reqRe.FindStringSubmatch(s); m != nil {
+		return m[1], m[2], true
+	}
+	if m := reqTitledRe.FindStringSubmatch(s); m != nil {
+		return m[1], strings.TrimSpace(m[2] + " " + m[3]), true
+	}
+	return "", "", false
+}
+
+// Requirements extracts **R<n>.** and **R<n>. Title.** paragraphs: the text up to the first list or
 // the next requirement, and the criteria — list items right after it that
 // start with "Дано" (or "Given").
 func Requirements(md string) []Requirement {
@@ -304,16 +315,16 @@ func Requirements(md string) []Requirement {
 		if ls[i].code {
 			continue
 		}
-		m := reqRe.FindStringSubmatch(strings.TrimSpace(ls[i].text))
-		if m == nil {
+		id, first, ok := reqLine(strings.TrimSpace(ls[i].text))
+		if !ok {
 			continue
 		}
-		r := Requirement{ID: m[1], Criteria: []string{}, Section: section(i)}
-		text := []string{m[2]}
+		r := Requirement{ID: id, Criteria: []string{}, Section: section(i)}
+		text := []string{first}
 		j := i + 1
 		for ; j < len(ls); j++ {
 			t := strings.TrimSpace(ls[j].text)
-			if ls[j].code || t == "" || listItemRe.MatchString(ls[j].text) || reqRe.MatchString(t) || headingRe.MatchString(t) {
+			if ls[j].code || t == "" || listItemRe.MatchString(ls[j].text) || reqRe.MatchString(t) || reqTitledRe.MatchString(t) || headingRe.MatchString(t) {
 				break
 			}
 			text = append(text, t)

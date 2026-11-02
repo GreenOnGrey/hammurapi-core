@@ -90,6 +90,13 @@ func TestSearchText(t *testing.T) {
 }
 
 // AGT-04: requirements with their criteria and section.
+func TestRequirementsTitleInBold(t *testing.T) {
+	got := Requirements("## Требования\n\n**R1. Заголовок.** Хвост.\n\n- Критерии приёмки:\n  - Дано а, когда б.\n\n**R2. Второе.**\n")
+	if len(got) != 2 || got[0].ID != "R1" || got[0].Text != "Заголовок. Хвост." || got[1].Text != "Второе." || len(got[0].Criteria) != 1 {
+		t.Fatalf("got %+v", got)
+	}
+}
+
 func TestRequirements(t *testing.T) {
 	md := `# P
 

@@ -33,14 +33,17 @@ type ServiceReqs struct {
 }
 
 var (
-	reqRe      = regexp.MustCompile(`\*\*(?:FTR\.[A-Z0-9.]+-\d+-)?(R\d+)\.?\*\*\.?\s*(.*)`)
-	reqRefRe   = regexp.MustCompile(`R(\d+)(?:\s*[–—-]\s*R(\d+))?`)
-	tcIDRe     = regexp.MustCompile(`^[A-Z][A-Z0-9]*-\d+$`)
-	headingRe  = regexp.MustCompile(`^(#{1,6})\s+(.*)$`)
-	listItemRe = regexp.MustCompile(`^(?:[-*+]|\d+[.)])\s+(.*)$`)
+	reqRe = regexp.MustCompile(`\*\*(?:FTR\.[A-Z0-9.]+-\d+-)?(R\d+)\.?\*\*\.?\s*(.*)`)
+	// reqTitledRe is the same ID with a title inside the bold: **R1. Title.** Text.
+	reqTitledRe = regexp.MustCompile(`^\*\*(?:FTR\.[A-Z0-9.]+-\d+-)?(R\d+)\.\s+([^*]+)\*\*\s*(.*)$`)
+	reqRefRe    = regexp.MustCompile(`R(\d+)(?:\s*[–—-]\s*R(\d+))?`)
+	tcIDRe      = regexp.MustCompile(`^[A-Z][A-Z0-9]*-\d+$`)
+	headingRe   = regexp.MustCompile(`^(#{1,6})\s+(.*)$`)
+	listItemRe  = regexp.MustCompile(`^(?:[-*+]|\d+[.)])\s+(.*)$`)
 )
 
-// ParseRequirements extracts **R<n>.** requirements (also <feature key>-R<n>).
+// ParseRequirements extracts **R<n>.** requirements (also <feature key>-R<n>
+// and **R<n>. Title.**).
 func ParseRequirements(doc string) []Req {
 	_, body, _ := SplitFrontMatter(doc)
 	seen := map[string]bool{}
@@ -50,28 +53,38 @@ func ParseRequirements(doc string) []Req {
 		if lm := listItemRe.FindStringSubmatch(t); lm != nil && !strings.HasPrefix(t, "**") {
 			t = strings.TrimSpace(lm[1])
 		}
-		m := reqRe.FindStringSubmatch(t)
-		if m == nil || !strings.HasPrefix(t, "**") {
+		if !strings.HasPrefix(t, "**") {
 			continue
 		}
-		if seen[m[1]] {
+		id, text := "", ""
+		if m := reqTitledRe.FindStringSubmatch(t); m != nil {
+			id, text = m[1], strings.TrimSpace(m[2]+" "+m[3])
+		} else if m := reqRe.FindStringSubmatch(t); m != nil {
+			id, text = m[1], strings.TrimSpace(m[2])
+		} else {
 			continue
 		}
-		seen[m[1]] = true
-		out = append(out, Req{ID: m[1], Text: strings.TrimSpace(m[2])})
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, Req{ID: id, Text: text})
 	}
 	return out
 }
 
 // UnnumberedRequirements lists top-level items of requirement sections that
-// have no R-ID (acceptance criteria "Given…/Дано…" are ignored).
+// have no R-ID (acceptance criteria "Given…/Дано…" are ignored). Items under a
+// requirement paragraph are its details, as in the product template.
 func UnnumberedRequirements(doc string) []string {
 	_, body, _ := SplitFrontMatter(doc)
 	var out []string
 	inReqs := false
 	level := 0
+	underReq := false
 	for _, line := range strings.Split(stripCode(body), "\n") {
 		if m := headingRe.FindStringSubmatch(line); m != nil {
+			underReq = false
 			l := len(m[1])
 			title := strings.ToLower(m[2])
 			if strings.Contains(title, "требован") || strings.Contains(title, "requirement") || strings.Contains(title, "anforderung") ||
@@ -87,15 +100,26 @@ func UnnumberedRequirements(doc string) []string {
 		}
 		m := listItemRe.FindStringSubmatch(strings.TrimSpace(line))
 		if m == nil {
+			if t := strings.TrimSpace(line); strings.HasPrefix(t, "**") && isRequirement(t) {
+				underReq = true
+			}
 			continue
 		}
 		item := strings.TrimSpace(m[1])
-		if item == "" || reqRe.MatchString(item) || isAcceptance(item) {
+		if item != "" && isRequirement(item) {
+			underReq = false
+			continue
+		}
+		if item == "" || underReq || isAcceptance(item) {
 			continue
 		}
 		out = append(out, item)
 	}
 	return out
+}
+
+func isRequirement(s string) bool {
+	return reqRe.MatchString(s) || reqTitledRe.MatchString(s)
 }
 
 func isAcceptance(s string) bool {
