@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -76,7 +77,7 @@ func (c *Chat) forward(w http.ResponseWriter, r *http.Request, path string) erro
 	if resp.StatusCode >= 500 && resp.StatusCode != http.StatusServiceUnavailable {
 		return ErrUnavailable()
 	}
-	for _, h := range []string{"Content-Type", "Content-Disposition", "Content-Length", "Cache-Control"} {
+	for _, h := range []string{"Content-Type", "Content-Disposition", "Content-Length", "Cache-Control", "X-Preview-Pages"} {
 		if v := resp.Header.Get(h); v != "" {
 			w.Header().Set(h, v)
 		}
@@ -119,6 +120,11 @@ func (c *Chat) Routes(r chi.Router) {
 	r.Post("/chat/attachments", to(fixed("/client/v1/me/attachments")))
 	r.Get("/chat/attachments/{id}", to(func(r *http.Request) string {
 		return "/client/v1/me/attachments/" + chi.URLParam(r, "id")
+	}))
+	// R26: only the files of messages, not the space of the user
+	r.Get("/chat/attachments/{id}/preview", httpx.Handler(func(w http.ResponseWriter, r *http.Request) error {
+		r.URL.RawQuery = url.Values{"attachment": {chi.URLParam(r, "id")}}.Encode()
+		return c.forward(w, r, "/client/v1/me/preview")
 	}))
 }
 

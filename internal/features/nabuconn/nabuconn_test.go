@@ -128,6 +128,10 @@ func newFakeNabu(t *testing.T) *fakeNabu {
 			w.WriteHeader(http.StatusNoContent)
 		case r.URL.Path == "/client/v1/me/messages/a1/stop" && r.Method == http.MethodPost:
 			w.WriteHeader(http.StatusAccepted)
+		case r.URL.Path == "/client/v1/me/preview":
+			w.Header().Set("Content-Type", "application/pdf")
+			w.Header().Set("X-Preview-Pages", "3/?")
+			_, _ = io.WriteString(w, "%PDF")
 		case r.URL.Path == "/client/v1/me/agent":
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnprocessableEntity)
@@ -191,6 +195,18 @@ func TestChatProxy(t *testing.T) {
 		}
 		<-f.seen
 		<-f.bodies
+	}
+
+	// FL-06: the preview of a file of a message: only by its id, with the pages of the answer (R26)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/chat/attachments/a1/preview?path=secret.docx", nil))
+	req = <-f.seen
+	<-f.bodies
+	if req.URL.Path != "/client/v1/me/preview" || req.URL.RawQuery != "attachment=a1" {
+		t.Fatalf("preview: %s", req.URL)
+	}
+	if w.Code != http.StatusOK || w.Header().Get("X-Preview-Pages") != "3/?" {
+		t.Fatalf("preview answer: %d %v", w.Code, w.Header())
 	}
 
 	w = httptest.NewRecorder()
