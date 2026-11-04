@@ -92,7 +92,7 @@ signature) → Trivy scan
 `run_id` and `callback_url` it follows the FTR.HMR.CMN-0002 deploy contract.
 
 Versions are pinned in `deploy/versions.env` (`DEPLOY_WORKFLOW_REF`, `CHART_VERSION`) and change by PR; after changing `DEPLOY_WORKFLOW_REF` run
-`deploy/sync-ref.sh` (CI checks it). Setup: `hammurapi-infra/docs/hammurapi.md`.
+`deploy/sync-ref.sh` (CI checks it). Setup: `installer/docs/hammurapi.md`.
 
 ## API
 
