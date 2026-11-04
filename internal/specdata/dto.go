@@ -66,6 +66,7 @@ type FeatureSummary struct {
 	Issues           []string            `json:"issues"`
 	CreatedAt        time.Time           `json:"createdAt"`
 	Gates            []GateDTO           `json:"gates"`
+	SkippedAreas     []string            `json:"skippedAreas"`
 }
 
 // ToSummary converts a listed feature.
@@ -74,9 +75,13 @@ func ToSummary(f ListedFeature) FeatureSummary {
 	if issues == nil {
 		issues = []string{}
 	}
+	skipped := f.SkippedAreas
+	if skipped == nil {
+		skipped = []string{}
+	}
 	return FeatureSummary{UniqueID: f.UniqueID, Domain: f.DomainKey, System: f.SystemKey, Title: f.Title, Phase: f.Phase,
 		ApprovalRequired: f.ApprovalRequired, IsProblem: f.IsProblem, Imported: f.Imported, Parent: f.ParentUniqueID,
-		Issues: issues, CreatedAt: f.CreatedAt, Gates: GateDTOs(f.Gates)}
+		Issues: issues, CreatedAt: f.CreatedAt, Gates: GateDTOs(f.Gates), SkippedAreas: skipped}
 }
 
 // AllApproved reports whether every gate is approved.
