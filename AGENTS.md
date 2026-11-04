@@ -11,7 +11,7 @@ Hammurapi is five repositories checked out side by side:
 | `hammurapi-core` (this one) | Go backend: one binary with modes and migrations |
 | `hammurapi-web` | React SPA |
 | `hammurapi` | Public: docs, docker-compose demo stack, self-hosted Helm chart, installer, reusable deploy workflow |
-| `installer` | Private: the stand (minikube), charts `hammurapi-core`/`hammurapi-web`, `hammurapi-deploy` |
+| `installer` | The stand (minikube), charts `hammurapi-core`/`hammurapi-web`, `hammurapi-deploy` |
 | `hammurapi-specs` | Source of truth: product, design, arch, tech and qa specifications |
 
 - Every change implements a feature specification from
