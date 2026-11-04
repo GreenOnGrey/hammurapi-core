@@ -11,7 +11,7 @@ Hammurapi is five repositories checked out side by side:
 | `hammurapi-core` (this one) | Go backend: one binary with modes and migrations |
 | `hammurapi-web` | React SPA |
 | `hammurapi` | Public: docs, docker-compose demo stack, self-hosted Helm chart, installer, reusable deploy workflow |
-| `hammurapi-infra` | Private: the stand (minikube), charts `hammurapi-core`/`hammurapi-web`, `hammurapi-deploy` |
+| `installer` | Private: the stand (minikube), charts `hammurapi-core`/`hammurapi-web`, `hammurapi-deploy` |
 | `hammurapi-specs` | Source of truth: product, design, arch, tech and qa specifications |
 
 - Every change implements a feature specification from
@@ -73,7 +73,7 @@ at the pinned version. Name any job you could not run in your report, with the r
 - Go code: `gofmt -l .` is empty; `golangci-lint` at the version of `ci.yml`, also with `--build-tags integration ./internal/itest/`.
 - `Dockerfile`, `go.mod`: build the target `release` and scan it with `trivy image --timeout 40m --severity CRITICAL,HIGH --ignore-unfixed --ignorefile .trivyignore.yaml <image>`.
 - `.github/**`, `deploy/versions.env`: `actionlint`, `deploy/sync-ref.sh --check`. `DEPLOY_WORKFLOW_REF` and `CHART_VERSION` name tags that are already published.
-- A new variable reaches the stand only through the payload of `hammurapi/.github/workflows/deploy-component.yml` or the chart in `hammurapi-infra`: add it there and to `hammurapi/docs/configuration.md`.
+- A new variable reaches the stand only through the payload of `hammurapi/.github/workflows/deploy-component.yml` or the chart in `installer`: add it there and to `hammurapi/docs/configuration.md`.
 - API fields: run `npm run lint` and `npm test` in `hammurapi-web`, and keep the old field until the web that stops reading it is deployed.
 - Always, after the checks pass: run the `code-review` skill on the diff to be committed. Fix each finding, or name it in your report with the reason it stays. Ask the user when you doubt a finding.
 
@@ -99,6 +99,6 @@ at the pinned version. Name any job you could not run in your report, with the r
 A tag `vX.Y.Z` runs `release.yml`: image `ghcr.io/greenongrey/hammurapi-core` (target `release`,
 distroless, no Node.js), SBOM, cosign signature, Trivy, then the reusable `deploy-component.yml` of the `hammurapi`
 repo pinned by `DEPLOY_WORKFLOW_REF` (run `deploy/sync-ref.sh` after changing it). `CHART_VERSION`
-is the `hammurapi-infra` release whose chart is installed. When a change needs a new chart or a new
+is the `installer` release whose chart is installed. When a change needs a new chart or a new
 deploy workflow, the order is: infra tag → hammurapi tag → bump `deploy/versions.env` here → core tag.
 A manual run of `release.yml` from `main` with an existing tag redeploys the signed image.
