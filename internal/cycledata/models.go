@@ -150,6 +150,14 @@ type Service struct {
 	Source              string          `json:"source"`
 	CatalogRef          *string         `json:"catalogRef"`
 	DeletedInCatalog    bool            `json:"deletedInCatalog"`
+	// Check is the readiness check of the code of the agent (FTR.HMR.CMN-0008 R1).
+	Check *ServiceCheck `json:"check"`
+}
+
+// ServiceCheck is the command that proves the code of the agent is ready.
+type ServiceCheck struct {
+	Command    string `json:"command"`
+	TimeoutSec int    `json:"timeoutSec"`
 }
 
 // Requirement is a requirement of the product specification (R15).

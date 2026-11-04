@@ -543,7 +543,7 @@ func RunWorker(ctx context.Context, cfg *config.Config) error {
 	// FTR.HMR.CMN-0007 R5: code tasks in the sandbox of Nabu; the task token is
 	// the MCP token of the run and outlives a restart of the worker.
 	code := &codegen.Code{Pool: c.pool, Store: c.store, Git: c.provider, Events: c.events, Nabu: ns.Client, Bindings: ns,
-		CallerMCPURL: cfg.NabuWorkerMCPURL, UserEmail: c.authRepo.UserEmail, Timeout: cfg.CodeTimeout, TokenKey: cfg.TokenEncryptionKey}
+		CallerMCPURL: cfg.NabuWorkerMCPURL, UserEmail: c.authRepo.UserEmail, Timeout: cfg.CodeTimeout, TokenKey: cfg.TokenEncryptionKey, CheckMaxRepairs: cfg.CodeCheckMaxRepairs}
 	mcpServer.Resolve = code.ResolveMCP
 	engine := workflows.New(c.pool, c.events, workflows.Config{MaxAttempts: cfg.WorkflowMaxAttempts, Lease: cfg.WorkflowLease,
 		Dispatchers: cfg.WorkflowDispatchers})

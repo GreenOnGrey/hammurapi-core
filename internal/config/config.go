@@ -112,6 +112,7 @@ type Config struct {
 	// Code tasks in the sandbox of Nabu (FTR.HMR.CMN-0007 tech §10): CODE_*;
 	// RUNNER_TIMEOUT and RUNNER_MAX_PARALLEL are read for one release.
 	CodeTimeout         time.Duration
+	CodeCheckMaxRepairs int // FTR.HMR.CMN-0008 R8
 	CodeMaxParallel     int
 	WorkflowMaxAttempts int
 	WorkflowLease       time.Duration
@@ -203,6 +204,9 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if c.CodeMaxParallel, err = envInt(renamed("CODE_MAX_PARALLEL", "RUNNER_MAX_PARALLEL"), 10); err != nil {
+		return nil, err
+	}
+	if c.CodeCheckMaxRepairs, err = envInt("CODE_CHECK_MAX_REPAIRS", 2); err != nil {
 		return nil, err
 	}
 	if c.WorkflowMaxAttempts, err = envInt("WORKFLOW_MAX_ATTEMPTS", 8); err != nil {

@@ -52,6 +52,10 @@ type TaskInput struct {
 	ReviewAuthor string `json:"reviewAuthor,omitempty"`
 }
 
+// AutofixAuthor is the author of the review comment of an automatic fix of
+// discrepancies found on validation (FTR.HMR.CMN-0008 R21).
+const AutofixAuthor = "hammurapi-validation"
+
 // TaskSpec describes a task to create.
 type TaskSpec struct {
 	Type      string

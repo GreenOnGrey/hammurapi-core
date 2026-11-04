@@ -14,14 +14,23 @@ import (
 
 const serviceCols = `s.id, s.key, s.name, s.system_id, d.key || '/' || sy.key, d.key, s.repo, s.owner_ref, s.autonomy, s.deploy_override,
 	s.override_from_catalog, s.source::text, s.catalog_ref, s.deleted_in_catalog,
-	COALESCE((SELECT array_agg(u.username ORDER BY u.username) FROM service_owners o JOIN users u ON u.id = o.user_id WHERE o.service_id = s.id), '{}')`
+	COALESCE((SELECT array_agg(u.username ORDER BY u.username) FROM service_owners o JOIN users u ON u.id = o.user_id WHERE o.service_id = s.id), '{}'),
+	s.check_command, s.check_timeout_sec`
 
 const serviceFrom = ` FROM services s LEFT JOIN systems sy ON sy.id = s.system_id LEFT JOIN domains d ON d.id = sy.domain_id`
 
 func scanService(row interface{ Scan(...any) error }) (*Service, error) {
 	var s Service
+	var command *string
+	var timeout *int
 	err := row.Scan(&s.ID, &s.Key, &s.Name, &s.SystemID, &s.System, &s.Domain, &s.Repo, &s.OwnerRef, &s.Autonomy, &s.DeployOverride,
-		&s.OverrideFromCatalog, &s.Source, &s.CatalogRef, &s.DeletedInCatalog, &s.Owners)
+		&s.OverrideFromCatalog, &s.Source, &s.CatalogRef, &s.DeletedInCatalog, &s.Owners, &command, &timeout)
+	if command != nil {
+		s.Check = &ServiceCheck{Command: *command}
+		if timeout != nil {
+			s.Check.TimeoutSec = *timeout
+		}
+	}
 	return &s, err
 }
 
@@ -104,6 +113,17 @@ func (d *DB) UpsertService(ctx context.Context, s *Service) error {
 // SetAutonomy changes the agent autonomy of a service.
 func (d *DB) SetAutonomy(ctx context.Context, id uuid.UUID, level domain.Autonomy) error {
 	_, err := d.q.Exec(ctx, `UPDATE services SET autonomy = $2, updated_at = now() WHERE id = $1`, id, level)
+	return err
+}
+
+// SetCheck stores the readiness check of a service; nil clears it (FTR.HMR.CMN-0008 R1).
+func (d *DB) SetCheck(ctx context.Context, id uuid.UUID, c *ServiceCheck) error {
+	var command *string
+	var timeout *int
+	if c != nil {
+		command, timeout = &c.Command, &c.TimeoutSec
+	}
+	_, err := d.q.Exec(ctx, `UPDATE services SET check_command = $2, check_timeout_sec = $3, updated_at = now() WHERE id = $1`, id, command, timeout)
 	return err
 }
 

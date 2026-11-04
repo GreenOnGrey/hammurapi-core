@@ -59,6 +59,7 @@ type Description struct {
 	Autonomy     domain.Autonomy         `json:"autonomy"`
 	Initiator    string                  `json:"initiator"`
 	Reviewers    []string                `json:"reviewers"`
+	Check        *cycledata.ServiceCheck `json:"check,omitempty"`
 	Requirements []cycledata.Requirement `json:"requirements"`
 	TestCases    []cycledata.TestCase    `json:"testCases"`
 	Specs        map[string]string       `json:"specs"`
@@ -83,6 +84,10 @@ type Result struct {
 	TokensOut    int64       `json:"tokensOut"`
 	Warnings     []string    `json:"warnings,omitempty"`
 	Usage        agent.Usage `json:"usage"`
+	// Check is the readiness check of the task; Stalled — the detector of
+	// Nabu stopped the agent (FTR.HMR.CMN-0008 R10, R18, R20).
+	Check   *nabu.CheckResult `json:"check,omitempty"`
+	Stalled bool              `json:"stalled,omitempty"`
 }
 
 // ScenarioOf maps a task type to its agent scenario.
@@ -119,6 +124,8 @@ type Code struct {
 	Timeout      time.Duration
 	// TokenKey derives the task tokens (TaskToken).
 	TokenKey []byte
+	// CheckMaxRepairs is CODE_CHECK_MAX_REPAIRS (FTR.HMR.CMN-0008 R8).
+	CheckMaxRepairs int
 }
 
 type taskPayload struct {
@@ -132,7 +139,7 @@ func (c *Code) describe(ctx context.Context, t *cycledata.Task) (*Description, e
 	if err != nil {
 		return nil, err
 	}
-	d := &Description{ID: t.ID, Type: t.Type, Repo: svc.Repo, Service: svc.Key, Autonomy: svc.Autonomy, Reviewers: svc.Owners,
+	d := &Description{ID: t.ID, Type: t.Type, Repo: svc.Repo, Service: svc.Key, Autonomy: svc.Autonomy, Reviewers: svc.Owners, Check: svc.Check,
 		Specs: map[string]string{}, Requirements: []cycledata.Requirement{}, TestCases: []cycledata.TestCase{}}
 	if d.Reviewers == nil {
 		d.Reviewers = []string{}
@@ -297,6 +304,10 @@ func (c *Code) Start(ctx context.Context, run workflows.RunRef, payload json.Raw
 	if t.InitiatorID != nil && c.UserEmail != nil {
 		initiator = c.UserEmail(ctx, *t.InitiatorID)
 	}
+	var check *nabu.RunCheck
+	if d.Check != nil && d.Autonomy != domain.AutonomyPlan { // FTR.HMR.CMN-0008 R14
+		check = &nabu.RunCheck{Command: d.Check.Command, TimeoutSec: d.Check.TimeoutSec, MaxRepairs: c.CheckMaxRepairs}
+	}
 	started, err := c.Nabu.StartRun(ctx, name, nabu.RunInput{
 		Input: taskSystem + "\n\n" + Prompt(d), Context: runCtx,
 		// The task token is the MCP token of the run: it resolves to the grant of the task.
@@ -304,6 +315,7 @@ func (c *Code) Start(ctx context.Context, run workflows.RunRef, payload json.Raw
 		Initiator:      initiator,
 		IdempotencyKey: "task:" + t.ID.String(),
 		Files:          upload,
+		Check:          check,
 	})
 	if err != nil {
 		var ae *nabu.APIError
@@ -343,6 +355,9 @@ type RunFinished struct {
 	Summary    string      `json:"summary,omitempty"`
 	Changes    int         `json:"changes"`
 	Usage      agent.Usage `json:"usage"`
+	// FTR.HMR.CMN-0008 R10, R20.
+	Check      *nabu.CheckResult `json:"check,omitempty"`
+	StopReason string            `json:"stopReason,omitempty"`
 }
 
 // Poll implements code.poll: run_finished when the run of Nabu ended.
@@ -376,6 +391,10 @@ func (c *Code) Poll(ctx context.Context, run workflows.RunRef, payload json.RawM
 	}
 	if r.Changes != nil {
 		f.Changes = r.Changes.Files
+	}
+	f.Check = r.Check
+	if r.StopReason != nil {
+		f.StopReason = *r.StopReason
 	}
 	_ = json.Unmarshal(r.Usage, &f.Usage)
 	return []workflows.NewEvent{{Type: "run_finished", Payload: f}}, nil
@@ -435,6 +454,10 @@ func (c *Code) Apply(ctx context.Context, run workflows.RunRef, payload json.Raw
 		return nil, err
 	}
 	res.Plan, res.Warnings = plan, warnings
+	res.Check, res.Stalled = checkOf(f, d), f.StopReason == StopStalled
+	if res.Stalled {
+		res.Warnings = append(res.Warnings, warningStalled)
+	}
 	return nil, c.finish(ctx, t, commit(ctx, p, token, d, res, changes, f.Summary))
 }
 
@@ -475,6 +498,13 @@ func (c *Code) finish(ctx context.Context, t *cycledata.Task, res Result) error 
 		}
 		if res.PRNumber > 0 && t.FeatureID != nil {
 			if err := storePR(ctx, cd, t, res); err != nil {
+				return err
+			}
+		}
+		// FTR.HMR.CMN-0008 R22: the validation waits for its automatic fixes.
+		var in TaskInput
+		if json.Unmarshal(t.Input, &in) == nil && in.ReviewAuthor == AutofixAuthor && t.FeatureID != nil {
+			if _, err := workflows.SendToSubject(ctx, tx, "validation", *t.FeatureID, "autofix_finished", map[string]string{"taskId": t.ID.String()}); err != nil {
 				return err
 			}
 		}
@@ -523,6 +553,12 @@ func storePR(ctx context.Context, cd *cycledata.DB, t *cycledata.Task, res Resul
 	}
 	if err := cd.UpsertPR(ctx, pr); err != nil {
 		return err
+	}
+	// FTR.HMR.CMN-0008 R16, R20: what is not proven needs a person, whatever the level.
+	if res.needsReview() && svc.Autonomy == domain.AutonomyAutonomous && pr.Review == "not_required" {
+		if err := cd.SetPRReview(ctx, pr.ID, "required"); err != nil {
+			return err
+		}
 	}
 	if res.HeadSHA != "" {
 		if err := cd.SetPRHead(ctx, pr.ID, res.HeadSHA); err != nil {

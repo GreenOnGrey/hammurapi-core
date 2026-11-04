@@ -277,12 +277,13 @@ func (s *Service) StartCodegen(ctx context.Context, p *domain.Principal, key str
 
 // ServiceImpl is one service of the Implementation tab (R21).
 type ServiceImpl struct {
-	Service  string           `json:"service"`
-	Repo     string           `json:"repo"`
-	Autonomy domain.Autonomy  `json:"autonomy"`
-	Tasks    []cycledata.Task `json:"tasks"`
-	PR       *cycledata.PR    `json:"pr"`
-	Plan     *string          `json:"plan"`
+	Service  string                  `json:"service"`
+	Repo     string                  `json:"repo"`
+	Autonomy domain.Autonomy         `json:"autonomy"`
+	Check    *cycledata.ServiceCheck `json:"check"` // FTR.HMR.CMN-0008 R1
+	Tasks    []cycledata.Task        `json:"tasks"`
+	PR       *cycledata.PR           `json:"pr"`
+	Plan     *string                 `json:"plan"`
 }
 
 // Implementation is GET /features/{key}/implementation.
@@ -330,7 +331,7 @@ func (s *Service) Implementation(ctx context.Context, p *domain.Principal, key s
 		return nil, err
 	}
 	for _, sv := range svcs {
-		si := ServiceImpl{Service: sv.Key, Repo: sv.Repo, Autonomy: sv.Autonomy, Tasks: []cycledata.Task{}}
+		si := ServiceImpl{Service: sv.Key, Repo: sv.Repo, Autonomy: sv.Autonomy, Check: sv.Check, Tasks: []cycledata.Task{}}
 		for _, t := range tasks {
 			if t.ServiceID == sv.ID {
 				t.Input = nil // internal

@@ -79,7 +79,7 @@ func ReadChanges(r io.Reader) ([]git.FileChange, string, []string, error) {
 		files[h.Name] = b
 	}
 	var out []git.FileChange
-	var warnings []string
+	var warnings, protected []string
 	plan := ""
 	for _, ch := range manifest.Changes {
 		p := path.Clean(ch.Path)
@@ -90,6 +90,9 @@ func ReadChanges(r io.Reader) ([]git.FileChange, string, []string, error) {
 		if p == PlanFile {
 			plan = string(files[p])
 			continue
+		}
+		if ch.Op != "added" && protectedPath(p) { // FTR.HMR.CMN-0008 R17
+			protected = append(protected, p)
 		}
 		switch ch.Op {
 		case "deleted":
@@ -105,6 +108,10 @@ func ReadChanges(r io.Reader) ([]git.FileChange, string, []string, error) {
 	}
 	for _, s := range manifest.Skipped {
 		warnings = append(warnings, fmt.Sprintf("left out by the sandbox (%s): %s", s.Reason, s.Path))
+	}
+	if len(protected) > 0 {
+		sort.Strings(protected)
+		warnings = append(warnings, warningProtected+strings.Join(protected, ", "))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
 	return out, plan, warnings, nil
@@ -171,6 +178,12 @@ func commit(ctx context.Context, p git.Provider, token string, d *Description, r
 		}
 		if d.Type == TaskReview {
 			_ = p.CommentPR(ctx, token, number, "Hammurapi agent addressed the review: "+strings.TrimSpace(text))
+		}
+		// FTR.HMR.CMN-0008 R15: the description of an open PR stays as it is.
+		if w := checkWarnings(res); w != "" {
+			if err := p.CommentPR(ctx, token, number, w); err != nil {
+				slog.Warn("comment the check on a PR failed", "err", err)
+			}
 		}
 	}
 	res.PRNumber = number
