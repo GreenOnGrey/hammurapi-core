@@ -75,6 +75,7 @@ at the pinned version. Name any job you could not run in your report, with the r
 - `.github/**`, `deploy/versions.env`: `actionlint`, `deploy/sync-ref.sh --check`. `DEPLOY_WORKFLOW_REF` and `CHART_VERSION` name tags that are already published.
 - A new variable reaches the stand only through the payload of `hammurapi/.github/workflows/deploy-component.yml` or the chart in `hammurapi-infra`: add it there and to `hammurapi/docs/configuration.md`.
 - API fields: run `npm run lint` and `npm test` in `hammurapi-web`, and keep the old field until the web that stops reading it is deployed.
+- Always, after the checks pass: run the `code-review` skill on the diff to be committed. Fix each finding, or name it in your report with the reason it stays. Ask the user when you doubt a finding.
 
 ## Rules learned the hard way
 
