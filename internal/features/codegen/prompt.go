@@ -32,6 +32,9 @@ func commitSubject(d *Description) string {
 
 func prBody(d *Description, res Result) string {
 	var b strings.Builder
+	if w := checkWarnings(res); w != "" { // FTR.HMR.CMN-0008 R15, R17, R20
+		b.WriteString(w + "\n\n")
+	}
 	fmt.Fprintf(&b, "Hammurapi feature **%s** — %s\n\n", d.Feature, d.FeatureTitle)
 	if len(res.Requirements) > 0 {
 		fmt.Fprintf(&b, "Requirements: %s\n\n", strings.Join(res.Requirements, ", "))

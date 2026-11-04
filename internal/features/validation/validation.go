@@ -106,6 +106,9 @@ func (Machine) Step(ctx context.Context, tx pgx.Tx, run *workflows.Run, evs []wo
 	}
 	cd := cycledata.New(tx)
 	var effects []workflows.Effect
+	if err := autofix(ctx, tx, cd, f, run, evs); err != nil { // FTR.HMR.CMN-0008 R21–R23
+		return workflows.Result{}, err
+	}
 	if run.Context["checked"] == nil {
 		// The agent checks the code of the PRs against the specification once per validation round.
 		effects = append(effects, workflows.Effect{Type: EffectCheck, Payload: map[string]any{"featureId": f.ID}})
@@ -244,10 +247,12 @@ type Summary struct {
 	Coverage      Coverage                  `json:"coverage"`
 	Matrix        []features.RequirementRow `json:"matrix"`
 	Discrepancies []cycledata.Discrepancy   `json:"discrepancies"`
-	Reviews       []ReviewRow               `json:"reviews"`
-	Stage         StageView                 `json:"stage"`
-	Signatures    []cycledata.Signature     `json:"signatures"`
-	Permissions   Permissions               `json:"permissions"`
+	// Autofixing counts the running automatic fixes (FTR.HMR.CMN-0008 design §3.5).
+	Autofixing  int                   `json:"autofixing"`
+	Reviews     []ReviewRow           `json:"reviews"`
+	Stage       StageView             `json:"stage"`
+	Signatures  []cycledata.Signature `json:"signatures"`
+	Permissions Permissions           `json:"permissions"`
 }
 
 // Coverage of requirements (R22).
@@ -376,6 +381,10 @@ func (s *Service) Get(ctx context.Context, p *domain.Principal, key string) (*Su
 		if passed {
 			out.Coverage.Passed++
 		}
+	}
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM agent_tasks WHERE feature_id = $1 AND type = 'address_review'
+		AND status IN ('queued','running') AND input->>'reviewAuthor' = $2`, f.ID, codegen.AutofixAuthor).Scan(&out.Autofixing); err != nil {
+		return nil, err
 	}
 	if out.Discrepancies, err = cd.OpenDiscrepancies(ctx, f.ID); err != nil {
 		return nil, err
@@ -724,6 +733,7 @@ func (e *Effects) Check(ctx context.Context, _ workflows.RunRef, payload json.Ra
 	if err := cd.ResolveDiscrepancies(ctx, f.ID); err != nil {
 		return nil, err
 	}
+	found := map[uuid.UUID][]string{}
 	for _, raw := range out.Results["discrepancy"] {
 		var d struct {
 			Requirement string `json:"requirement"`
@@ -740,6 +750,130 @@ func (e *Effects) Check(ctx context.Context, _ workflows.RunRef, payload json.Ra
 		if err := cd.AddDiscrepancy(ctx, f.ID, d.Requirement, prID, d.Description); err != nil {
 			return nil, err
 		}
+		if prID != nil {
+			found[*prID] = append(found[*prID], d.Requirement+": "+d.Description)
+		}
 	}
-	return nil, nil
+	// FTR.HMR.CMN-0008 R21: the workflow decides what to do with them.
+	done := checkDone{}
+	for _, pr := range prs {
+		if lines, ok := found[pr.ID]; ok && pr.ByAgent && pr.ServiceID != nil {
+			done.PRs = append(done.PRs, foundPR{ID: pr.ID, Number: pr.Number, ServiceID: *pr.ServiceID, Text: strings.Join(lines, "\n")})
+		}
+	}
+	return []workflows.NewEvent{{Type: eventCheckDone, Payload: done}}, nil
+}
+
+// Events of the automatic fix of discrepancies (FTR.HMR.CMN-0008 R21, R22).
+const (
+	eventCheckDone      = "check_done"
+	eventAutofixDone    = "autofix_finished"
+	contextAutofix      = "autofix"
+	autofixPendingField = "pending"
+)
+
+// foundPR is a PR of the agent with discrepancies.
+type foundPR struct {
+	ID        uuid.UUID `json:"id"`
+	Number    int       `json:"number"`
+	ServiceID uuid.UUID `json:"serviceId"`
+	Text      string    `json:"text"`
+}
+
+// checkDone is the outcome of the agent check.
+type checkDone struct {
+	PRs []foundPR `json:"prs"`
+}
+
+// autofix reacts to the agent check: the first time in a round the agent fixes
+// what it found, the next time what is left stays for a person. It runs in the
+// transaction of the step.
+func autofix(ctx context.Context, tx pgx.Tx, cd *cycledata.DB, f *specdata.Feature, run *workflows.Run, evs []workflows.Event) error {
+	for _, ev := range evs {
+		switch ev.Type {
+		case eventCheckDone:
+			var done checkDone
+			if err := ev.Decode(&done); err != nil {
+				return err
+			}
+			if run.Context[contextAutofix] != nil {
+				if err := requireReviews(ctx, cd, done.PRs); err != nil {
+					return err
+				}
+				continue
+			}
+			pending := []any{}
+			for _, pr := range done.PRs {
+				var active int
+				if err := tx.QueryRow(ctx, `SELECT count(*) FROM agent_tasks WHERE feature_id = $1 AND service_id = $2 AND type = 'address_review'
+					AND status IN ('queued','running')`, f.ID, pr.ServiceID).Scan(&active); err != nil {
+					return err
+				}
+				if active > 0 {
+					continue // CHK-52: a person sees the discrepancy
+				}
+				id, err := codegen.StartTask(ctx, tx, codegen.TaskSpec{Type: codegen.TaskReview, FeatureID: &f.ID, ServiceID: pr.ServiceID,
+					Input: codegen.TaskInput{PRNumber: pr.Number, Comment: "Discrepancies with the requirements found by the check of the code:\n" + pr.Text, ReviewAuthor: codegen.AutofixAuthor}})
+				if err != nil {
+					return err
+				}
+				pending = append(pending, id.String())
+			}
+			if len(done.PRs) > 0 {
+				run.Context[contextAutofix] = map[string]any{autofixPendingField: pending}
+			}
+			if len(done.PRs) > 0 && len(pending) == 0 {
+				if err := requireReviews(ctx, cd, done.PRs); err != nil {
+					return err
+				}
+			}
+		case eventAutofixDone:
+			var in struct {
+				TaskID string `json:"taskId"`
+			}
+			if err := ev.Decode(&in); err != nil {
+				return err
+			}
+			state, _ := run.Context[contextAutofix].(map[string]any)
+			pending, _ := state[autofixPendingField].([]any)
+			left := []any{}
+			for _, id := range pending {
+				if id != in.TaskID {
+					left = append(left, id)
+				}
+			}
+			if state == nil || len(pending) == 0 {
+				continue
+			}
+			state[autofixPendingField] = left
+			if len(left) == 0 {
+				delete(run.Context, "checked") // the check runs again in this step
+			}
+		}
+	}
+	return nil
+}
+
+// requireReviews asks a person to review the PRs with discrepancies left on
+// the autonomous level (FTR.HMR.CMN-0008 R23).
+func requireReviews(ctx context.Context, cd *cycledata.DB, prs []foundPR) error {
+	for _, pr := range prs {
+		svc, err := cd.ServiceByID(ctx, pr.ServiceID)
+		if err != nil {
+			return err
+		}
+		if svc.Autonomy != domain.AutonomyAutonomous {
+			continue
+		}
+		cur, err := cd.PRByRepoNumber(ctx, svc.Repo, pr.Number)
+		if err != nil {
+			return err
+		}
+		if cur.Review == "not_required" {
+			if err := cd.SetPRReview(ctx, pr.ID, "required"); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

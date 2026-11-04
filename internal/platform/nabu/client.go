@@ -215,6 +215,27 @@ type RunInput struct {
 	IdempotencyKey string          `json:"idempotencyKey,omitempty"`
 	// Files is the upload with the working copy (FTR.HMR.CMN-0007 tech §2.2).
 	Files string `json:"files,omitempty"`
+	// Check is the readiness check of the run (FTR.HMR.CMN-0008 R5).
+	Check *RunCheck `json:"check,omitempty"`
+}
+
+// RunCheck is the check block of a run.
+type RunCheck struct {
+	Command    string `json:"command"`
+	TimeoutSec int    `json:"timeoutSec,omitempty"`
+	MaxRepairs int    `json:"maxRepairs,omitempty"`
+}
+
+// CheckResult is the result of the check of a run (FTR.HMR.CMN-0008 tech §2.1).
+type CheckResult struct {
+	Status      string `json:"status"` // passed | failed | unavailable | not_run
+	Reason      string `json:"reason,omitempty"`
+	Command     string `json:"command"`
+	Attempts    int    `json:"attempts"`
+	MaxAttempts int    `json:"maxAttempts"`
+	ExitCode    *int   `json:"exitCode,omitempty"`
+	OutputTail  string `json:"outputTail,omitempty"`
+	DurationMs  int64  `json:"durationMs"`
 }
 
 // Started is the answer of a run start.
@@ -263,6 +284,8 @@ type Run struct {
 	Changes    *struct {
 		Files int `json:"files"`
 	} `json:"changes"`
+	Check      *CheckResult `json:"check"`
+	StopReason *string      `json:"stopReason"`
 }
 
 // GetRun reads a run.
