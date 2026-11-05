@@ -38,7 +38,7 @@ type User struct {
 	Experts     []auth.ExpertDomains `json:"experts"`
 	CreatedAt   time.Time            `json:"createdAt"`
 	// Email, sign-in identities (issuers) and the git account
-	// (FTR.HMR.CMN-0006 design: columns «Вход» and «Git-аккаунт»).
+	// (FTR.HMR.CMN-0006 design: columns "Sign-in" and "Git account").
 	Email      *string  `json:"email"`
 	Logins     []string `json:"logins"`
 	GitLogin   *string  `json:"gitLogin"`

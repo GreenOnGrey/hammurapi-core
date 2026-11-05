@@ -1,4 +1,4 @@
-# Проверки на каждый PR: линтер, тесты, синхронизация DEPLOY_WORKFLOW_REF, actionlint.
+# Checks on every PR: the linter, tests, the sync of DEPLOY_WORKFLOW_REF, actionlint.
 name: ci
 on:
   pull_request:
@@ -23,16 +23,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: { go-version-file: go.mod }
-      - name: Юнит-тесты
+      - name: Unit tests
         run: go test ./...
-      - name: Интеграционные тесты (Postgres через dockertest)
+      - name: Integration tests (Postgres through dockertest)
         run: go test -tags integration -count=1 ./internal/itest/...
 
   workflows:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: DEPLOY_WORKFLOW_REF совпадает с uses в release.yml
+      - name: DEPLOY_WORKFLOW_REF matches uses in release.yml
         run: bash deploy/sync-ref.sh --check
       - name: actionlint
         run: |

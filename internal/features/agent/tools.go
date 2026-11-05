@@ -145,7 +145,7 @@ var discoverySchema = schema(map[string]any{
 }, "content", "value", "estimate")
 
 // MaxChangeSummary bounds the summary of the changes of a revision; a longer
-// one is cut by discovery.ClipSummary (FTR.HMR.DISC-0001 tech, решение 28).
+// one is cut by discovery.ClipSummary (FTR.HMR.DISC-0001 tech, decision 28).
 const MaxChangeSummary = 1000
 
 // estimateSchema is the draft estimate of the work (FTR.HMR.DISC-0001 R15).
