@@ -295,7 +295,7 @@ func answeredIDs(ctx context.Context, q postgres.Querier, requestIDs []uuid.UUID
 
 // ClipSummary cuts a summary longer than agent.MaxChangeSummary at the last
 // line that fits, or at a word, with an ellipsis: a refusal made the agent
-// write the whole document again (FTR.HMR.DISC-0001 tech, решение 28).
+// write the whole document again (FTR.HMR.DISC-0001 tech, decision 28).
 func ClipSummary(s string) string {
 	s = strings.TrimSpace(s)
 	r := []rune(s)

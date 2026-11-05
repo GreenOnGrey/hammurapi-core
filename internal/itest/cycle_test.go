@@ -423,7 +423,7 @@ func TestCycle(t *testing.T) {
 
 // WF-07: an effect that runs an agent for minutes holds only its dispatcher:
 // another run gets its effect done and its result processed meanwhile
-// (FTR.HMR.CMN-0002 arch §5.2, FTR.HMR.DISC-0001 tech, решение 27).
+// (FTR.HMR.CMN-0002 arch §5.2, FTR.HMR.DISC-0001 tech, decision 27).
 func TestEngineParallelEffects(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
