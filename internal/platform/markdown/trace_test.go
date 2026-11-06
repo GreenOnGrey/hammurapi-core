@@ -103,3 +103,24 @@ func TestFillSection(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+// GEN-05: an inserted requirement keeps its letter, R26a.
+func TestRequirementsWithSuffix(t *testing.T) {
+	got := ParseRequirements("**R26a.** Вставлено.\n\n**R26b. Ещё.** Текст.\n")
+	if len(got) != 2 || got[0].ID != "R26a" || got[1].ID != "R26b" {
+		t.Fatalf("got %+v", got)
+	}
+	for in, want := range map[string]string{
+		"R26a, R3–R5":  "R26a R3 R4 R5",
+		"R26a–R26c":    "R26a R26b R26c",
+		"R26–R26b":     "R26 R26a R26b",
+		"R25–R27a":     "R25 R26 R27 R27a",
+		"R12e2e, R1.":  "R12 R1",
+		"R5–R3, R7–R7": "R5 R7",
+		"PR3 и R4":     "R4",
+	} {
+		if got := strings.Join(ParseReqRefs(in), " "); got != want {
+			t.Errorf("ParseReqRefs(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

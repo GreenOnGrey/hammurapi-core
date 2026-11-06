@@ -12,6 +12,8 @@ import (
 	"unicode"
 
 	"go.yaml.in/yaml/v3"
+
+	"github.com/GreenOnGrey/hammurapi-core/internal/platform/markdown"
 )
 
 // Areas of a feature folder that are indexed; other folder names are ignored.
@@ -278,8 +280,8 @@ type Requirement struct {
 }
 
 var (
-	reqRe       = regexp.MustCompile(`^\*\*(R\d+)\.\*\*\s*(.*)$`)
-	reqTitledRe = regexp.MustCompile(`^\*\*(R\d+)\.\s+([^*]+)\*\*\s*(.*)$`) // **R1. Title.** Text.
+	reqRe       = regexp.MustCompile(`^\*\*(` + markdown.ReqID + `)\.\*\*\s*(.*)$`)
+	reqTitledRe = regexp.MustCompile(`^\*\*(` + markdown.ReqID + `)\.\s+([^*]+)\*\*\s*(.*)$`) // **R1. Title.** Text.
 	listItemRe  = regexp.MustCompile(`^\s*(?:[-*+]|\d+[.)])\s+(.*)$`)
 	criterionRe = regexp.MustCompile(`^(?i)(Дано|Given)[\s,:]`) // \b is ASCII-only in RE2
 )
@@ -295,8 +297,9 @@ func reqLine(s string) (id, text string, ok bool) {
 }
 
 // Requirements extracts **R<n>.** and **R<n>. Title.** paragraphs: the text up to the first list or
-// the next requirement, and the criteria — list items right after it that
-// start with "Дано" (or "Given").
+// the next requirement, and the criteria — list items that start with "Дано"
+// (or "Given") up to the next requirement or heading. Details of the requirement,
+// a list or a paragraph, may come before them (FTR.HMR.CMN-0005 tech §4.3).
 func Requirements(md string) []Requirement {
 	_, body := splitFrontMatter(md)
 	ls := lines(body)
@@ -329,20 +332,17 @@ func Requirements(md string) []Requirement {
 			}
 			text = append(text, t)
 		}
-		// Skip blank lines, then read the list of criteria.
-		for j < len(ls) && strings.TrimSpace(ls[j].text) == "" && !ls[j].code {
-			j++
-		}
 		for ; j < len(ls); j++ {
 			if ls[j].code {
+				continue
+			}
+			t := strings.TrimSpace(ls[j].text)
+			if reqRe.MatchString(t) || reqTitledRe.MatchString(t) || headingRe.MatchString(t) {
 				break
 			}
 			lm := listItemRe.FindStringSubmatch(ls[j].text)
 			if lm == nil {
-				if strings.TrimSpace(ls[j].text) == "" {
-					continue
-				}
-				break
+				continue
 			}
 			if item := plain(lm[1]); criterionRe.MatchString(item) {
 				r.Criteria = append(r.Criteria, item)
@@ -363,7 +363,7 @@ type Reference struct {
 	Snippet string
 }
 
-var refRe = regexp.MustCompile(`FTR\.[A-Z][A-Z0-9]{1,9}\.[A-Z][A-Z0-9]{1,9}-\d{4}(?:-R\d+)?`)
+var refRe = regexp.MustCompile(`FTR\.[A-Z][A-Z0-9]{1,9}\.[A-Z][A-Z0-9]{1,9}-\d{4}(?:-` + markdown.ReqID + `)?`)
 
 // References lists mentions of features and requirements outside code blocks;
 // mentions of the document's own feature are skipped.

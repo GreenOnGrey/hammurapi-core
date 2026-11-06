@@ -5,11 +5,11 @@ package codegen
 import (
 	"bytes"
 	"fmt"
-	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/git"
+	"github.com/GreenOnGrey/hammurapi-core/internal/platform/markdown"
 )
 
 // runePrefix is the first n runes of s.
@@ -91,15 +91,13 @@ func Prompt(d *Description) string {
 	return b.String()
 }
 
-var reqIDRe = regexp.MustCompile(`\bR\d+\b`)
-
 func mentionedReqs(text string, d *Description) []string {
 	mine := map[string]bool{}
 	for _, r := range d.Requirements {
 		mine[r.ID] = true
 	}
 	got := map[string]bool{}
-	for _, m := range reqIDRe.FindAllString(text, -1) {
+	for _, m := range markdown.ParseReqRefs(text) {
 		if mine[m] {
 			got[m] = true
 		}
