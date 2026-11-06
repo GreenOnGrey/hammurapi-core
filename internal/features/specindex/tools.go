@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/GreenOnGrey/hammurapi-core/internal/platform/markdown"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/mcp"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/postgres"
 )
@@ -317,7 +318,7 @@ func (s *Service) notFound(ctx context.Context, key, area string) error {
 func (s *Service) FeatureRequirements(ctx context.Context, key string, ids []string) ([]Requirement, error) {
 	rows, err := s.pool.Query(ctx, `SELECT req_id, text, criteria, COALESCE(section, '') FROM spec_requirements
 		WHERE feature_key = $1 AND (cardinality($2::text[]) = 0 OR req_id = ANY($2))
-		ORDER BY substring(req_id from 2)::int`, key, ids)
+		ORDER BY substring(req_id from '\d+')::int, req_id`, key, ids)
 	if err != nil {
 		return nil, err
 	}
@@ -345,7 +346,7 @@ func (s *Service) FeatureRequirements(ctx context.Context, key string, ids []str
 	return out, nil
 }
 
-var targetRe = regexp.MustCompile(`^(FTR\.[A-Z][A-Z0-9]{1,9}\.[A-Z][A-Z0-9]{1,9}-\d{4})(?:-(R\d+))?$`)
+var targetRe = regexp.MustCompile(`^(FTR\.[A-Z][A-Z0-9]{1,9}\.[A-Z][A-Z0-9]{1,9}-\d{4})(?:-(` + markdown.ReqID + `))?$`)
 
 // References lists mentions of a feature or a requirement (AGT-05, AGT-06).
 func (s *Service) References(ctx context.Context, target string, page int) (map[string]any, error) {
