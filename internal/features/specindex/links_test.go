@@ -2,7 +2,10 @@ package specindex
 
 import (
 	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/GreenOnGrey/hammurapi-core/internal/platform/markdown"
 )
 
 // LINK-01: «Опирается на» with three keys and explanations in parentheses gives three "extends".
@@ -69,5 +72,24 @@ func TestSortReqs(t *testing.T) {
 	sortReqs(ids)
 	if !reflect.DeepEqual(ids, []string{"R2", "R13", "R26", "R26a"}) {
 		t.Fatalf("got %v", ids)
+	}
+}
+
+// CHG-07: notes put by FTR.HMR.DEV-0002 keep the criteria the index reads, also of a lettered requirement with details.
+func TestRequirementsKeepCriteriaWithNotes(t *testing.T) {
+	doc := "# Бронь\n\n## 4. Требования\n\n**R13.** Отмена бесплатна\nв течение 30 минут.\n- Дано бронь, когда отмена, тогда бесплатно.\n\n" +
+		"**R26a. Возврат.** Деньги возвращаются.\n\nУточнение: на карту.\n\n- Дано отмена, когда платёж картой, тогда возврат на карту.\n"
+	noted := markdown.ApplyNotes(doc, "FTR.FMS.CAR-0042", []markdown.Note{{Req: "R13", Text: "А"}, {Req: "R26a", SourceReq: "R2", Text: "Б"}})
+	before, after := Requirements(doc), Requirements(noted)
+	if len(before) != 2 || len(after) != 2 {
+		t.Fatalf("requirements %+v / %+v", before, after)
+	}
+	for i := range before {
+		if !reflect.DeepEqual(before[i].Criteria, after[i].Criteria) || len(after[i].Criteria) != 1 {
+			t.Fatalf("%s criteria %q → %q", before[i].ID, before[i].Criteria, after[i].Criteria)
+		}
+	}
+	if !strings.Contains(after[0].Text, "Изменено в FTR.FMS.CAR-0042") { // R9: the agent reading the requirement sees the note
+		t.Fatalf("text %q", after[0].Text)
 	}
 }

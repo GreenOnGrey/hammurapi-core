@@ -16,10 +16,13 @@ import (
 	"github.com/GreenOnGrey/hammurapi-core/internal/apperr"
 	"github.com/GreenOnGrey/hammurapi-core/internal/cycledata"
 	"github.com/GreenOnGrey/hammurapi-core/internal/domain"
+	"github.com/GreenOnGrey/hammurapi-core/internal/features/auth"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/features"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/featuretopics"
+	"github.com/GreenOnGrey/hammurapi-core/internal/features/specchanges"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/workflows"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/events"
+	"github.com/GreenOnGrey/hammurapi-core/internal/platform/git"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/httpx"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/postgres"
 	"github.com/GreenOnGrey/hammurapi-core/internal/specdata"
@@ -49,6 +52,9 @@ type Service struct {
 	Pool   *pgxpool.Pool
 	Store  specdata.Store
 	Events events.Publisher
+	// Changes and Tokens align the notes of the product document before the next stage (FTR.HMR.DEV-0002 R6); nil — none.
+	Changes *specchanges.Service
+	Tokens  git.TokenSource
 }
 
 // AnswerQuestions gives the answers of an expert on the page of the feature to
@@ -167,6 +173,16 @@ func (s *Service) Advance(ctx context.Context, p *domain.Principal, key string) 
 	all, err := s.Store.ActiveGates(ctx, f.ID)
 	if err != nil {
 		return "", err
+	}
+	// FTR.HMR.DEV-0002 R3, R6: the notes are aligned before any next stage, the legacy one too
+	if s.Changes != nil && slices.ContainsFunc(all, func(g specdata.Gate) bool { return g.Area == domain.AreaProduct }) {
+		token, err := s.Tokens.Token(ctx, p.UserID)
+		if err != nil {
+			return "", err
+		}
+		if err := s.Changes.Ensure(ctx, token, f); err != nil {
+			return "", auth.MapGitError(err)
+		}
 	}
 	if f.SpecFlow != specdata.FlowWriter {
 		stage := legacyStage(all)

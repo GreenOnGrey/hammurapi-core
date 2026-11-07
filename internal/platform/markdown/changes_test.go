@@ -2,6 +2,7 @@ package markdown
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -50,5 +51,84 @@ func TestParseChangesWithoutNote(t *testing.T) {
 	got := ParseChanges(doc)
 	if len(got) != 1 || got[0].Req != "R3" || got[0].Note != "" {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+const target = "# Бронь\n\n**Версия:** 2.1\n**Решение:** `FTR.FMS.CAR-0002`\n\n---\n\n## 4. Требования\n\n" +
+	"**R13.** Отмена брони бесплатна\nв течение 30 минут.\n- Дано бронь, когда отмена через 10 минут, тогда бесплатно.\n\n" +
+	"**R26a. Возврат.** Деньги возвращаются.\n\nУточнение: на карту.\n\n- Дано отмена, когда платёж картой, тогда возврат на карту.\n\n" +
+	"```markdown\n**R13.** Пример в коде.\n```\n"
+
+// CHG-03: the note goes right after the first line of R13; the rest of the text is the same.
+func TestApplyNotes(t *testing.T) {
+	got := ApplyNotes(target, "FTR.FMS.CAR-0042", []Note{{Req: "R13", SourceReq: "R4", Text: "Отмена платная после 10 минут."}})
+	want := strings.Replace(target, "**R13.** Отмена брони бесплатна\n",
+		"**R13.** Отмена брони бесплатна\n*Изменено в `FTR.FMS.CAR-0042` R4: Отмена платная после 10 минут.*\n", 1)
+	if got != want {
+		t.Fatalf("got\n%s", got)
+	}
+	// CHG-04: applying the same notes again gives the same text.
+	if again := ApplyNotes(got, "FTR.FMS.CAR-0042", []Note{{Req: "R13", SourceReq: "R4", Text: "Отмена платная после 10 минут."}}); again != got {
+		t.Fatalf("not idempotent\n%s", again)
+	}
+	// CHG-08: without the note lines the document is the same, byte for byte.
+	if back := ApplyNotes(got, "FTR.FMS.CAR-0042", nil); back != target {
+		t.Fatalf("not reversible\n%s", back)
+	}
+}
+
+// CHG-05: a removed row removes the note of the source; the note of another feature stays, and a new one goes after it.
+func TestApplyNotesOtherSources(t *testing.T) {
+	doc := ApplyNotes(target, "FTR.FMS.CAR-0042", []Note{{Req: "R13", Text: "А"}})
+	doc = ApplyNotes(doc, "FTR.FMS.CAR-0050", []Note{{Req: "R13", Text: "Б"}})
+	if !strings.Contains(doc, "бесплатна\n*Изменено в `FTR.FMS.CAR-0042`: А.*\n*Изменено в `FTR.FMS.CAR-0050`: Б.*\nв течение") {
+		t.Fatalf("order\n%s", doc)
+	}
+	doc = ApplyNotes(doc, "FTR.FMS.CAR-0042", nil)
+	if strings.Contains(doc, "CAR-0042") || !strings.Contains(doc, "бесплатна\n*Изменено в `FTR.FMS.CAR-0050`: Б.*\nв течение") {
+		t.Fatalf("removal\n%s", doc)
+	}
+}
+
+// CHG-06: a note of the whole feature goes after the header lines, before the rule.
+func TestApplyNotesWholeFeature(t *testing.T) {
+	got := ApplyNotes(target, "FTR.FMS.CAR-0042", []Note{{Text: "Новая страница решения"}})
+	if !strings.Contains(got, "**Решение:** `FTR.FMS.CAR-0002`\n*Изменено в `FTR.FMS.CAR-0042`: Новая страница решения.*\n\n---") {
+		t.Fatalf("got\n%s", got)
+	}
+}
+
+// CHG-07: a lettered requirement with criteria after details: the criteria the index reads stay the same.
+// The index test of the same document is in specindex (TestRequirementsKeepCriteriaWithNotes).
+func TestApplyNotesLettered(t *testing.T) {
+	got := ApplyNotes(target, "FTR.FMS.CAR-0042", []Note{{Req: "R26a", SourceReq: "R2", Text: "Возврат на счёт"}})
+	if !strings.Contains(got, "**R26a. Возврат.** Деньги возвращаются.\n*Изменено в `FTR.FMS.CAR-0042` R2: Возврат на счёт.*\n\nУточнение") {
+		t.Fatalf("got\n%s", got)
+	}
+	if strings.Contains(got, "Пример в коде.\n*Изменено") {
+		t.Fatal("a requirement in a code block got a note")
+	}
+}
+
+// CHG-09: a cancelled requirement gets the same note with its text.
+func TestApplyNotesCancelled(t *testing.T) {
+	got := ApplyNotes(target, "FTR.FMS.CAR-0042", []Note{{Req: "R13", SourceReq: "R7", Text: "требование больше не действует"}})
+	if !strings.Contains(got, "*Изменено в `FTR.FMS.CAR-0042` R7: требование больше не действует.*") {
+		t.Fatalf("got\n%s", got)
+	}
+}
+
+func TestApplyNotesMissingRequirement(t *testing.T) {
+	if got := ApplyNotes(target, "FTR.FMS.CAR-0042", []Note{{Req: "R99", Text: "А"}}); got != target {
+		t.Fatalf("got\n%s", got)
+	}
+}
+
+// CHG-06 for a fix: the front matter is not the header; the note goes after the header lines below it.
+func TestApplyNotesWholeFeatureWithFrontMatter(t *testing.T) {
+	doc := "---\nparent: FTR.FMS.CAR-0002\n---\n\n# Исправление\n\n**Версия:** 1.0\n\n---\n\n## 4. Требования\n"
+	got := ApplyNotes(doc, "FTR.FMS.CAR-0042", []Note{{Text: "Новая страница"}})
+	if !strings.Contains(got, "**Версия:** 1.0\n*Изменено в `FTR.FMS.CAR-0042`: Новая страница.*\n\n---\n\n## 4.") {
+		t.Fatalf("got\n%s", got)
 	}
 }

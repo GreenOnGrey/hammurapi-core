@@ -24,6 +24,21 @@ func (h *Handlers) Routes(r chi.Router) {
 		r.Get("/diff", httpx.Handler(h.diff))
 		r.Get("/history", httpx.Handler(h.history))
 	})
+	r.Get("/features/{uniqueId}/spec/changes", httpx.Handler(h.changes))
+}
+
+// changes is GET /features/{uniqueId}/spec/changes (FTR.HMR.DEV-0002 tech §2.1).
+func (h *Handlers) changes(w http.ResponseWriter, r *http.Request) error {
+	p, err := httpx.MustPrincipal(r)
+	if err != nil {
+		return err
+	}
+	items, err := h.svc.SpecChanges(r.Context(), p, chi.URLParam(r, "uniqueId"))
+	if err != nil {
+		return err
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"items": items})
+	return nil
 }
 
 func params(r *http.Request) (*domain.Principal, string, domain.Area, error) {
