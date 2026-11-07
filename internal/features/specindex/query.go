@@ -52,13 +52,14 @@ type Tree struct {
 
 // IndexTag is the version of the index for ETag: it changes with every write.
 func (s *Service) IndexTag(ctx context.Context) (string, error) {
-	var n int64
+	var n, links int64
 	var last *time.Time
-	if err := s.pool.QueryRow(ctx, `SELECT count(*), max(updated_at) FROM spec_documents`).Scan(&n, &last); err != nil {
+	// spec_links counts too: the backfill writes links without touching the documents.
+	if err := s.pool.QueryRow(ctx, `SELECT count(*), (SELECT count(*) FROM spec_links), max(updated_at) FROM spec_documents`).Scan(&n, &links, &last); err != nil {
 		return "", err
 	}
 	h := sha1.New() //nolint:gosec
-	fmt.Fprintf(h, "%d|", n)
+	fmt.Fprintf(h, "%d|%d|", n, links)
 	if last != nil {
 		fmt.Fprint(h, last.UnixNano())
 	}
@@ -169,6 +170,8 @@ type FeatureInfo struct {
 	Parent       *string    `json:"parent"`
 	Issues       []IssueRef `json:"issues"`
 	PullRequests []PRRef    `json:"pullRequests"`
+	// Links are the links of the feature with other features (FTR.HMR.DEV-0002 R14).
+	Links *FeatureLinks `json:"links"`
 }
 
 // Document is GET /api/v1/spec/documents/{featureKey}/{area}.
@@ -218,6 +221,9 @@ func (s *Service) Document(ctx context.Context, key, area string) (*Document, er
 	d.Areas = orderAreas(areas)
 	info, err := s.featureInfo(ctx, key)
 	if err != nil {
+		return nil, err
+	}
+	if info.Links, err = s.featureLinks(ctx, key); err != nil {
 		return nil, err
 	}
 	d.Feature = *info
