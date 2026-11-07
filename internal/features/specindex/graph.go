@@ -99,8 +99,8 @@ type GraphQuery struct {
 	Domain, System, Kind string
 }
 
-// keyParts are the domain and the system of a feature key.
-func keyParts(key string) (string, string) {
+// KeyParts are the domain and the system of a feature key.
+func KeyParts(key string) (string, string) {
 	parts := strings.SplitN(strings.TrimPrefix(key, "FTR."), ".", 2)
 	if len(parts) != 2 {
 		return "", ""
@@ -153,11 +153,11 @@ func (s *Service) SpecGraph(ctx context.Context, q GraphQuery) (*Graph, error) {
 			e.Requirements = []string{}
 		}
 		if _, ok := nodes[e.Target]; !ok { // R17: a key outside the index
-			d, sy := keyParts(e.Target)
+			d, sy := KeyParts(e.Target)
 			nodes[e.Target] = &GraphNode{Key: e.Target, Domain: d, System: sy, Phase: phase}
 		}
 		if _, ok := nodes[e.Source]; !ok { // the document left the index between the two reads
-			d, sy := keyParts(e.Source)
+			d, sy := KeyParts(e.Source)
 			nodes[e.Source] = &GraphNode{Key: e.Source, Domain: d, System: sy}
 		}
 		edges = append(edges, e)

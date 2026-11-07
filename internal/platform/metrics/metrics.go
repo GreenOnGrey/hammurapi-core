@@ -118,6 +118,11 @@ var (
 		Name: "hammurapi_spec_run_duration_seconds", Help: "Duration of the agent session of a run of the writer by mode.",
 		Buckets: []float64{60, 180, 300, 600, 1200, 1800, 3600},
 	}, []string{"mode"})
+	// SpecChangeNotes counts notes of changed requirements (FTR.HMR.DEV-0002 arch §7):
+	// applied, rejected rows, re-applied after a conflict of the merge.
+	SpecChangeNotes = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "hammurapi_spec_change_notes_total", Help: "Notes in changed features by result (applied, rejected, conflict_reapplied).",
+	}, []string{"result"})
 	SpecRequests = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "hammurapi_spec_requests_total", Help: "Instructions to the writer by the state they reached (queued, running, done, failed).",
 	}, []string{"state"})
@@ -144,7 +149,7 @@ func init() {
 		SpecScanRuns, SpecScanDuration, SpecIndexIssuesOpen, SpecDocuments, SpecIndexedFeatures,
 		WorkflowRuns, WorkflowTransitionDuration, WorkflowBlocked, EffectsFailed, CodeTaskStates, CodeTaskDuration,
 		CodeTokens, DeployRuns, ReleaseRollbacks,
-		SpecRuns, SpecRunDuration, SpecRequests, FeatureTopicsCreated, DiscoveryRequests, DiscoveryRequestDuration, NabuNotices, IssueTopicsCreated, IssueTopicsArchived, DiscoveryQuestionsDropped,
+		SpecRuns, SpecRunDuration, SpecRequests, SpecChangeNotes, FeatureTopicsCreated, DiscoveryRequests, DiscoveryRequestDuration, NabuNotices, IssueTopicsCreated, IssueTopicsArchived, DiscoveryQuestionsDropped,
 	)
 }
 

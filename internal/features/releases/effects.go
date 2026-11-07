@@ -6,13 +6,17 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/GreenOnGrey/hammurapi-core/internal/cycledata"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/deploy"
+	"github.com/GreenOnGrey/hammurapi-core/internal/features/specchanges"
+	"github.com/GreenOnGrey/hammurapi-core/internal/features/specindex"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/workflows"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/git"
+	"github.com/GreenOnGrey/hammurapi-core/internal/platform/metrics"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/postgres"
 	"github.com/GreenOnGrey/hammurapi-core/internal/specdata"
 )
@@ -33,6 +37,12 @@ type Effects struct {
 	Store  specdata.Store
 	Git    git.Provider
 	Tokens git.TokenSource
+	// Changes and DefaultBranch put the notes of the feature over the fresh
+	// default branch before the specification is merged (FTR.HMR.DEV-0002 R8); nil — none.
+	Changes       *specchanges.Service
+	DefaultBranch string
+	// UpdateWait and UpdatePoll bound the wait for an update of the branch (30 s, every 2 s by default).
+	UpdateWait, UpdatePoll time.Duration
 }
 
 // permanent reports a provider refusal that retries will not fix.
@@ -127,6 +137,16 @@ func (e *Effects) MergeSpec(ctx context.Context, _ workflows.RunRef, payload jso
 	if err == nil && info.State == "merged" {
 		return []workflows.NewEvent{{Type: "spec_merged", Payload: map[string]string{"sha": info.MergeSHA}}}, nil
 	}
+	if e.Changes != nil {
+		if reason, err := e.alignNotes(ctx, token, f); err != nil {
+			if permanent(err) {
+				return []workflows.NewEvent{{Type: "merge_failed", Payload: map[string]string{"reason": git.Reason(err)}}}, nil
+			}
+			return nil, err
+		} else if reason != "" {
+			return []workflows.NewEvent{{Type: "merge_failed", Payload: map[string]string{"reason": reason}}}, nil
+		}
+	}
 	if err := e.Git.MergePR(ctx, token, f.PRNumber, fmt.Sprintf("%s: specification of the confirmed release", f.UniqueID)); err != nil {
 		if permanent(err) || errors.Is(err, git.ErrConflict) {
 			return []workflows.NewEvent{{Type: "merge_failed", Payload: map[string]string{"reason": git.Reason(err)}}}, nil
@@ -134,6 +154,125 @@ func (e *Effects) MergeSpec(ctx context.Context, _ workflows.RunRef, payload jso
 		return nil, err
 	}
 	return []workflows.NewEvent{{Type: "spec_merged", Payload: map[string]string{}}}, nil
+}
+
+// alignNotes brings the branch of the feature up to the default branch and
+// puts its notes over it (FTR.HMR.DEV-0002 arch §3.4, tech §5.3). Files of other
+// features in the branch come only from the notes: when the update conflicts,
+// they go back to the default branch and the notes are put again. A conflict
+// that stays is in the files of the feature: the reason of merge_failed.
+func (e *Effects) alignNotes(ctx context.Context, token string, f *specdata.Feature) (string, error) {
+	conflict, err := e.updateBranch(ctx, token, f)
+	if err != nil {
+		return "", err
+	}
+	if conflict {
+		files, err := e.Git.PRChangedFiles(ctx, token, f.PRNumber)
+		if err != nil {
+			return "", err
+		}
+		var reset []git.FileChange
+		for _, cf := range files {
+			loc, ok := specindex.ParsePath(cf.Path)
+			if !ok || loc.Folder == f.UniqueID {
+				continue
+			}
+			main, err := e.Git.GetFile(ctx, token, e.DefaultBranch, cf.Path)
+			switch {
+			case errors.Is(err, git.ErrNotFound):
+				reset = append(reset, git.FileChange{Path: cf.Path, Delete: true})
+			case err != nil:
+				return "", err
+			default:
+				reset = append(reset, git.FileChange{Path: cf.Path, Content: main.Content})
+			}
+		}
+		if len(reset) == 0 {
+			return "conflict with the default branch in the files of the feature", nil
+		}
+		if _, err := e.Git.Commit(ctx, token, f.Branch, specchanges.CommitMessage(f.UniqueID), reset); err != nil {
+			return "", err
+		}
+		if conflict, err = e.updateBranch(ctx, token, f); err != nil {
+			return "", err
+		}
+		if conflict {
+			return "conflict with the default branch in the files of the feature", nil
+		}
+		metrics.SpecChangeNotes.WithLabelValues("conflict_reapplied").Inc()
+	}
+	product, err := e.Git.GetFile(ctx, token, f.Branch, git.SpecPath(f.DomainKey, f.SystemKey, f.UniqueID, "product"))
+	if errors.Is(err, git.ErrNotFound) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	// rows that turned wrong since the submission (a target left the index) get no note: the merge goes on
+	changes, _, err := e.Changes.Align(ctx, token, f, string(product.Content))
+	if err != nil || len(changes) == 0 {
+		return "", err
+	}
+	if _, err = e.Git.Commit(ctx, token, f.Branch, specchanges.CommitMessage(f.UniqueID), changes); err != nil {
+		return "", err
+	}
+	specchanges.Applied(changes)
+	return "", nil
+}
+
+// updateBranch merges the default branch into the branch of the PR and waits
+// for it: the providers update a branch asynchronously, and refuse a conflict
+// and a branch already up to date alike. The branch is up to date when it
+// contains the head of the default branch; a conflict is a PR that says it
+// does not merge. Waiting longer than UpdateWait is an error the effect retries.
+func (e *Effects) updateBranch(ctx context.Context, token string, f *specdata.Feature) (bool, error) {
+	mainHead, err := e.Git.BranchHead(ctx, token, e.DefaultBranch)
+	if err != nil {
+		return false, err
+	}
+	updated := func() (bool, error) {
+		head, err := e.Git.BranchHead(ctx, token, f.Branch)
+		if err != nil {
+			return false, err
+		}
+		return e.Git.IsAncestor(ctx, token, mainHead, head)
+	}
+	if ok, err := updated(); err != nil || ok {
+		return false, err
+	}
+	if err := e.Git.UpdatePRBranch(ctx, token, f.PRNumber); err != nil {
+		var ae *git.APIError // 422: a conflict, decided below by the PR
+		if !errors.As(err, &ae) || ae.Status != http.StatusUnprocessableEntity {
+			return false, err
+		}
+	}
+	wait, step := e.UpdateWait, e.UpdatePoll
+	if wait <= 0 {
+		wait = 30 * time.Second
+	}
+	if step <= 0 {
+		step = 2 * time.Second
+	}
+	for deadline := time.Now().Add(wait); ; {
+		if ok, err := updated(); err != nil || ok {
+			return false, err
+		}
+		info, err := e.Git.GetPR(ctx, token, f.PRNumber)
+		if err != nil {
+			return false, err
+		}
+		if info.Mergeable != nil && !*info.Mergeable {
+			return true, nil
+		}
+		if time.Now().After(deadline) {
+			return false, fmt.Errorf("the branch %s is not updated with the default branch yet", f.Branch)
+		}
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-time.After(step):
+		}
+	}
 }
 
 // CheckTag counts a tag containing the merge commit as the release of the

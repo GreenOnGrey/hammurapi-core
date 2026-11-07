@@ -14,6 +14,7 @@ import (
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/auth"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/features"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/gates"
+	"github.com/GreenOnGrey/hammurapi-core/internal/features/specchanges"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/events"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/git"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/httpx"
@@ -46,6 +47,8 @@ type Service struct {
 	tokens git.TokenSource
 	events events.Publisher
 	gen    gates.Generator
+	// Changes aligns the notes of the product document before it is submitted (FTR.HMR.DEV-0002 R6); nil — none.
+	Changes *specchanges.Service
 }
 
 // NewService creates the service.
@@ -111,8 +114,22 @@ func (s *Service) Submit(ctx context.Context, p *domain.Principal, uniqueID stri
 			}
 		}
 	}
+	var changesToken string
+	if area == domain.AreaProduct && s.Changes != nil { // FTR.HMR.DEV-0002 R3: wrong rows refuse before anything is written
+		if changesToken, err = s.tokens.Token(ctx, p.UserID); err != nil {
+			return nil, err
+		}
+		if err := s.Changes.Verify(ctx, changesToken, f); err != nil {
+			return nil, auth.MapGitError(err)
+		}
+	}
 	if err := s.writeOpenQuestions(ctx, p, f, g, forceQuestions); err != nil {
 		return nil, err
+	}
+	if changesToken != "" { // R6: the notes in one commit right before the gate is in review
+		if err := s.Changes.Ensure(ctx, changesToken, f); err != nil {
+			return nil, auth.MapGitError(err)
+		}
 	}
 	now := time.Now()
 	g.Status, g.SubmittedAt = domain.GateInReview, &now
