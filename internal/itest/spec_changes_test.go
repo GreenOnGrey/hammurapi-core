@@ -345,7 +345,7 @@ func TestSpecChangeNotes(t *testing.T) {
 	}
 	// VIEW-01: the row is marked, with a link to the requirement.
 	it := items()["FTR.FMS.CAR-0002 R13"]
-	if it.State != "marked" || it.URL != "/spec/FMS/CAR/FTR.FMS.CAR-0002/product#r13" {
+	if it.State != "marked" || it.URL != "/spec/FTR.FMS.CAR-0002/product#r13" {
 		t.Fatalf("item %+v", it)
 	}
 

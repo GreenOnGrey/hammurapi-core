@@ -6,7 +6,6 @@ package specchanges
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"strings"
 
@@ -286,8 +285,7 @@ func (s *Service) Items(ctx context.Context, token string, f *specdata.Feature, 
 			req := r.Req
 			it.Requirement = &req
 		}
-		d, sys := specindex.KeyParts(r.Feature)
-		it.URL = fmt.Sprintf("/spec/%s/%s/%s/product", d, sys, r.Feature)
+		it.URL = "/spec/" + r.Feature + "/product" // the route of the navigator
 		if r.Req != "" {
 			it.URL += "#" + strings.ToLower(r.Req)
 		}
