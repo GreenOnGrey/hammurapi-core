@@ -204,7 +204,7 @@ func TestSpecIndex(t *testing.T) {
 		t.Fatalf("id search %+v", res)
 	}
 
-	// AGT-02, AGT-04, AGT-05: the agent's tools.
+	// AGT-01, AGT-02, AGT-04, AGT-05: the agent's tools, read-only in every mode.
 	tools := map[string]mcp.Tool{}
 	for _, tl := range svc.Tools() {
 		tools[tl.Name] = tl
