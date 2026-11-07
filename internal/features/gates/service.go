@@ -15,6 +15,7 @@ import (
 	"github.com/GreenOnGrey/hammurapi-core/internal/domain"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/auth"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/features"
+	"github.com/GreenOnGrey/hammurapi-core/internal/features/specchanges"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/events"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/git"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/httpx"
@@ -42,6 +43,8 @@ type Service struct {
 	events        events.Publisher
 	gen           Generator
 	defaultBranch string
+	// Changes keeps the notes in the features a product document changes (FTR.HMR.DEV-0002); nil — none.
+	Changes *specchanges.Service
 }
 
 // NewService creates the service.
@@ -226,14 +229,24 @@ func (s *Service) SaveDocument(ctx context.Context, p *domain.Principal, uniqueI
 	if newSHA == curSHA {
 		return &SaveResult{SHA: curSHA}, nil // no change, no commit (no noise in git)
 	}
+	changes := []git.FileChange{{Path: path, Content: []byte(in.Content)}}
+	var notes []git.FileChange
+	if area == domain.AreaProduct && s.Changes != nil {
+		// FTR.HMR.DEV-0002 R3, R4: the notes go in the same commit; a wrong row does not stop the save
+		if notes, _, err = s.Changes.Align(ctx, token, f, in.Content); err != nil {
+			return nil, auth.MapGitError(err)
+		}
+		changes = append(changes, notes...)
+	}
 	msg := git.Trailers{Feature: f.UniqueID, Area: string(area)}.Message(fmt.Sprintf("%s: edit %s specification", f.UniqueID, area))
-	commit, err := s.git.Commit(ctx, token, f.Branch, msg, []git.FileChange{{Path: path, Content: []byte(in.Content)}})
+	commit, err := s.git.Commit(ctx, token, f.Branch, msg, changes)
 	if errors.Is(err, git.ErrConflict) {
 		return nil, apperr.Conflict("stale_document", "the branch changed concurrently, retry")
 	}
 	if err != nil {
 		return nil, auth.MapGitError(err)
 	}
+	specchanges.Applied(notes)
 	return &SaveResult{SHA: newSHA, Commit: &commit}, nil
 }
 
@@ -345,4 +358,35 @@ func (s *Service) Meta(ctx context.Context, uniqueID string, area domain.Area) (
 // RecordTransition counts a gate transition metric.
 func RecordTransition(area domain.Area, to string) {
 	metrics.GateTransitions.WithLabelValues(string(area), to).Inc()
+}
+
+// SpecChanges lists the rows of the section «Изменения в других решениях» of the
+// product document with their state in the branch (FTR.HMR.DEV-0002 R7).
+func (s *Service) SpecChanges(ctx context.Context, p *domain.Principal, uniqueID string) ([]specchanges.Item, error) {
+	f, err := features.Load(ctx, s.store, uniqueID)
+	if err != nil {
+		return nil, err
+	}
+	token, err := s.tokens.Token(ctx, p.UserID)
+	if err != nil {
+		return nil, err
+	}
+	items := []specchanges.Item{}
+	if s.Changes == nil {
+		return items, nil
+	}
+	file, err := s.git.GetFile(ctx, token, s.readRef(f), specPath(f, domain.AreaProduct))
+	if errors.Is(err, git.ErrNotFound) {
+		return items, nil
+	}
+	if err != nil {
+		return nil, auth.MapGitError(err)
+	}
+	ref := *f
+	ref.Branch = s.readRef(f)
+	got, err := s.Changes.Items(ctx, token, &ref, string(file.Content))
+	if err != nil {
+		return nil, auth.MapGitError(err)
+	}
+	return append(items, got...), nil
 }

@@ -60,6 +60,9 @@ const DiscoveryRule = "\n--- How Discovery is revised ---\n" +
 
 // ToolDeps are the dependencies of the MCP tools.
 type ToolDeps struct {
+	// CheckChanges checks the section «Изменения в других решениях» of a product
+	// document the writer submits (FTR.HMR.DEV-0002 R3): the reasons of the wrong rows, "" — none.
+	CheckChanges  func(ctx context.Context, featureKey, product string) (string, error)
 	Store         specdata.Store
 	Git           git.Provider
 	Tokens        git.TokenSource
@@ -671,6 +674,21 @@ func Tools(d ToolDeps) []mcp.Tool {
 			Handler: func(ctx context.Context, g mcp.Grant, raw json.RawMessage) (string, error) {
 				if msg := CheckSubmission(g.Writer, raw); msg != "" {
 					return "", &mcp.ToolError{Msg: msg}
+				}
+				if d.CheckChanges != nil {
+					var in struct {
+						Area    domain.Area `json:"area"`
+						Content string      `json:"content"`
+					}
+					if json.Unmarshal(raw, &in) == nil && in.Area == domain.AreaProduct && in.Content != "" {
+						msg, err := d.CheckChanges(ctx, g.Feature, in.Content)
+						if err != nil {
+							return "", err
+						}
+						if msg != "" { // FTR.HMR.DEV-0002 R3: the revision is not taken
+							return "", &mcp.ToolError{Msg: msg}
+						}
+					}
 				}
 				return sinkHandler("gate")(ctx, g, raw)
 			},

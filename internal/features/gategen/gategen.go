@@ -24,6 +24,7 @@ import (
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/discovery"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/features"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/gates"
+	"github.com/GreenOnGrey/hammurapi-core/internal/features/specchanges"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/trace"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/usage"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/workflows"
@@ -702,6 +703,8 @@ type Effects struct {
 	Runner        *agentrun.Runner
 	DefaultBranch string
 	Timeout       time.Duration
+	// Changes puts the notes of a written product document into the commit of the run (FTR.HMR.DEV-0002 R4); nil — none.
+	Changes *specchanges.Service
 }
 
 // Submission is what the writer submitted for an area.
@@ -838,6 +841,7 @@ Questions:
 - arch sets audience product when the product experts decide the question. Any gate sets touches when the answer may change another gate: the expert decides whether to allow that change.
 Other gates: you may submit another gate only when a brief names it or an expert allowed it with an answer. If you see a problem in another gate, do not change it: ask a question with touches naming it.
 Manual revisions of experts in the documents stay unless a brief says otherwise.
+Changes to other features (FTR.HMR.DEV-0002 R1–R3): if product changes behavior described in requirements of other features of the default branch, list them in the section "Изменения в других решениях" of product as a table | Решение | Требование | Что изменилось |: the full key, one requirement R<n> per row or "всё решение", what changed in one sentence; a cancelled requirement says "требование больше не действует". Find them with spec_search, spec_requirements and spec_references. Unsure whether a requirement is changed or only extended: ask a question with a recommendation. A feature still in work is not changed here: its change goes through an instruction in its own topic. Do not write a line "Меняет:". Hammurapi puts the notes "Изменено в …" into the changed features: do not write them yourself.
 Carry answers and decisions to the section "Принятые решения" with the reason. Do not write the section "Открытые вопросы" and remove it if the document has it: the server adds it when the gate is submitted with open questions. Remove the hints of the template from the document.
 design also has a mockup: call submit_gate_file with mockups.html: a single self-contained page of the screens, light and dark theme, color-scheme declared in each, no network dependencies except fonts.
 A gate that is not needed (only design and arch): submit_gate without content with one question whose skipArea is this area, with why. The experts decide.
@@ -994,6 +998,14 @@ func (e *Effects) run(ctx context.Context, run workflows.RunRef, featureID uuid.
 	}
 	written, docChanges := documentChanges(f, req.Areas, out.Results, files)
 	changes = append(changes, docChanges...)
+	var notes []git.FileChange
+	if s, ok := out.Results[domain.AreaProduct]; ok && slices.Contains(written, domain.AreaProduct) && e.Changes != nil {
+		// submit_gate refused wrong rows; one the index lost since then gets no note
+		if notes, _, err = e.Changes.Align(ctx, token, f, s.Content); err != nil {
+			return nil, err
+		}
+		changes = append(changes, notes...)
+	}
 	if len(changes) == 0 {
 		return out, nil
 	}
@@ -1002,6 +1014,7 @@ func (e *Effects) run(ctx context.Context, run workflows.RunRef, featureID uuid.
 	if err != nil {
 		return nil, err
 	}
+	specchanges.Applied(notes)
 	for _, a := range written {
 		out.Commits[a] = sha
 	}

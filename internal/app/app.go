@@ -51,6 +51,7 @@ import (
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/rollback"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/rules"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/services"
+	"github.com/GreenOnGrey/hammurapi-core/internal/features/specchanges"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/specindex"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/usage"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/validation"
@@ -251,6 +252,7 @@ type slices struct {
 	issues    *issues.Service
 	catalog   *catalog.Syncer
 	spec      *specindex.Service
+	changes   *specchanges.Service
 }
 
 func (c *core) slices() *slices {
@@ -262,10 +264,14 @@ func (c *core) slices() *slices {
 		AgentReadMaxChars: cfg.SpecAgentReadMaxChars, AgentPageSize: cfg.SpecAgentPageSize})
 	fs := features.NewService(c.store, c.provider, c.authSvc, c.events, branch)
 	mt := metricsources.NewService(c.pool, c.secrets)
+	changes := &specchanges.Service{Q: c.pool, Git: c.provider} // FTR.HMR.DEV-0002
+	gs := gates.NewService(c.store, c.provider, c.authSvc, c.events, gategen.Generator{Q: c.pool}, branch)
+	gs.Changes = changes
 	return &slices{
 		spec:      spec,
+		changes:   changes,
 		issues:    issues.NewService(c.store, fs, mt, c.events),
-		gates:     gates.NewService(c.store, c.provider, c.authSvc, c.events, gategen.Generator{Q: c.pool}, branch),
+		gates:     gs,
 		features:  fs,
 		metrics:   mt,
 		discovery: discovery.NewService(c.pool, c.events),
@@ -276,6 +282,8 @@ func (c *core) slices() *slices {
 
 func (c *core) toolDeps(s *slices, loadPrincipal agent.PrincipalLoader) agent.ToolDeps {
 	return agent.ToolDeps{Store: c.store, Git: c.provider, Tokens: c.authSvc, Gates: s.gates, Principal: loadPrincipal,
+		// FTR.HMR.DEV-0002 R3: the writer gets the reasons of wrong rows of the section
+		CheckChanges:  s.changes.Refusal,
 		DefaultBranch: c.cfg.GitDefaultBranch, TestMetric: s.metrics.Test,
 		// FTR.HMR.DISC-0001: instructions to the researcher, the basis and the check of the estimate
 		RequestRevision: func(ctx context.Context, p *domain.Principal, g mcp.Grant, key string, brief agent.RevisionBrief) (string, error) {
@@ -353,6 +361,7 @@ func RunAPI(ctx context.Context, cfg *config.Config) error {
 	sl := c.slices()
 
 	approvalSvc := approvals.NewService(c.store, approvals.NewRepository(c.pool), c.provider, tokens, c.events, gategen.Generator{Q: c.pool})
+	approvalSvc.Changes = sl.changes
 	domainSvc := domains.NewService(c.pool, c.events)
 	domainSvc.CatalogChanged = sl.spec.RequestCatalog // R6: a new domain or system triggers a check
 	profileSvc := profile.NewService(c.pool)
@@ -434,7 +443,7 @@ func RunAPI(ctx context.Context, cfg *config.Config) error {
 			issueSvc.Routes(r)
 			topics.Routes(r)
 			featureTopics.Routes(r)
-			(&gategen.Service{Pool: c.pool, Store: c.store, Events: c.events}).Routes(r)
+			(&gategen.Service{Pool: c.pool, Store: c.store, Events: c.events, Changes: sl.changes, Tokens: tokens}).Routes(r)
 			sl.discovery.Routes(r)
 			sl.metrics.Routes(r) // FTR.HMR.DISC-0001 R23: the sources to choose from
 			sl.spec.Routes(r)
@@ -559,7 +568,8 @@ func RunWorker(ctx context.Context, cfg *config.Config) error {
 	engine.Handle(discovery.EffectNotice, workflows.EffectHandler{Do: notices.Do})
 	specNotices := &gategen.NoticeEffects{Q: c.pool, Email: c.authRepo.UserEmail, Nabu: ns.Client}
 	engine.Handle(gategen.EffectNotice, workflows.EffectHandler{Do: specNotices.Do})
-	gen := &gategen.Effects{Store: c.store, Git: c.provider, Tokens: tokens, Runner: agents, DefaultBranch: cfg.GitDefaultBranch, Timeout: cfg.WriterTimeout}
+	gen := &gategen.Effects{Store: c.store, Git: c.provider, Tokens: tokens, Runner: agents, DefaultBranch: cfg.GitDefaultBranch, Timeout: cfg.WriterTimeout,
+		Changes: sl.changes}
 	engine.Handle(gategen.Effect, workflows.EffectHandler{Lease: cfg.WriterTimeout + time.Minute, Do: gen.Do})
 	engine.Handle(gategen.EffectTrace, workflows.EffectHandler{Do: gen.DoTrace})
 	engine.Handle(gategen.EffectDrain, workflows.EffectHandler{Do: (&gategen.DrainEffects{Q: c.pool}).Do})
@@ -571,7 +581,7 @@ func RunWorker(ctx context.Context, cfg *config.Config) error {
 	engine.Handle(codegen.EffectStop, workflows.EffectHandler{Do: code.Cancel})
 	dep := &deploy.Effects{Q: c.pool, Trigger: cicd.New(c.provider), Secrets: c.secrets, PublicURL: cfg.HooksURL}
 	engine.Handle(deploy.Effect, workflows.EffectHandler{Do: dep.Do})
-	rel := &releases.Effects{Q: c.pool, Store: c.store, Git: c.provider, Tokens: tokens}
+	rel := &releases.Effects{Q: c.pool, Store: c.store, Git: c.provider, Tokens: tokens, Changes: sl.changes, DefaultBranch: cfg.GitDefaultBranch}
 	engine.Handle(releases.EffectMerge, workflows.EffectHandler{Do: rel.Merge})
 	engine.Handle(releases.EffectMergeSpec, workflows.EffectHandler{Do: rel.MergeSpec})
 	engine.Handle(releases.EffectCheckTag, workflows.EffectHandler{Do: rel.CheckTag})
