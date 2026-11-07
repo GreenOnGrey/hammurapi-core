@@ -259,7 +259,7 @@ func (d *DB) Requirements(ctx context.Context, featureID uuid.UUID) ([]Requireme
 		COALESCE((SELECT array_agg(s.key ORDER BY s.key) FROM requirement_services rs JOIN services s ON s.id = rs.service_id
 		 WHERE rs.feature_id = r.feature_id AND rs.req_id = r.req_id), '{}')
 		FROM requirements r WHERE r.feature_id = $1
-		ORDER BY length(r.req_id), r.req_id`, featureID)
+		ORDER BY substring(r.req_id from '\d+')::int, r.req_id`, featureID)
 	if err != nil {
 		return nil, err
 	}

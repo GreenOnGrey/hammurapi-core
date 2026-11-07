@@ -168,3 +168,38 @@ func TestDocumentByTemplate(t *testing.T) {
 		t.Fatalf("references %+v", refs)
 	}
 }
+
+// AGT-04: criteria follow details of the requirement — a list and a paragraph —
+// and end at the next requirement or heading (FTR.HMR.CMN-0005 tech §4.3).
+func TestRequirementsCriteriaAfterDetails(t *testing.T) {
+	md := `## Требования
+
+**R3.** Писатель получает весь Discovery:
+- ответы экспертов — принятые решения;
+- допущения — ещё не решения.
+
+Вопросы, которые Discovery не решает, решаются здесь.
+- Критерии приёмки:
+  - Дано эксперт ответил, когда писатель пишет, тогда вопроса нет.
+
+### 4.2 Дальше
+
+- Дано под другим заголовком.
+`
+	got := Requirements(md)
+	if len(got) != 1 || len(got[0].Criteria) != 1 || got[0].Text != "Писатель получает весь Discovery:" {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+// AGT-04: an inserted requirement keeps its letter, R26a.
+func TestRequirementsWithSuffix(t *testing.T) {
+	got := Requirements("**R26a.** Вставлено.\n- Дано а.\n\n**R26b. Ещё.** Текст.\n")
+	if len(got) != 2 || got[0].ID != "R26a" || len(got[0].Criteria) != 1 || got[1].ID != "R26b" {
+		t.Fatalf("got %+v", got)
+	}
+	refs := References("см. FTR.NAB.CMN-0001-R26c", "FTR.HMR.CMN-0007")
+	if len(refs) != 1 || refs[0].Target != "FTR.NAB.CMN-0001" || refs[0].Req != "R26c" {
+		t.Fatalf("refs %+v", refs)
+	}
+}

@@ -32,11 +32,15 @@ type ServiceReqs struct {
 	ReqIDs  []string
 }
 
+// ReqID is the pattern of a requirement ID: R<n>, or R<n><letter> for a
+// requirement inserted later after R<n> (FTR.HMR.CMN-0005 tech §4.3).
+const ReqID = `R\d+(?:[a-z]\b)?`
+
 var (
-	reqRe = regexp.MustCompile(`\*\*(?:FTR\.[A-Z0-9.]+-\d+-)?(R\d+)\.?\*\*\.?\s*(.*)`)
+	reqRe = regexp.MustCompile(`\*\*(?:FTR\.[A-Z0-9.]+-\d+-)?(` + ReqID + `)\.?\*\*\.?\s*(.*)`)
 	// reqTitledRe is the same ID with a title inside the bold: **R1. Title.** Text.
-	reqTitledRe = regexp.MustCompile(`^\*\*(?:FTR\.[A-Z0-9.]+-\d+-)?(R\d+)\.\s+([^*]+)\*\*\s*(.*)$`)
-	reqRefRe    = regexp.MustCompile(`R(\d+)(?:\s*[–—-]\s*R(\d+))?`)
+	reqTitledRe = regexp.MustCompile(`^\*\*(?:FTR\.[A-Z0-9.]+-\d+-)?(` + ReqID + `)\.\s+([^*]+)\*\*\s*(.*)$`)
+	reqRefRe    = regexp.MustCompile(`\bR(\d+)((?:[a-z]\b)?)(?:\s*[–—-]\s*R(\d+)((?:[a-z]\b)?))?`)
 	tcIDRe      = regexp.MustCompile(`^[A-Z][A-Z0-9]*-\d+$`)
 	headingRe   = regexp.MustCompile(`^(#{1,6})\s+(.*)$`)
 	listItemRe  = regexp.MustCompile(`^(?:[-*+]|\d+[.)])\s+(.*)$`)
@@ -203,25 +207,43 @@ func cell(row []string, i int) string {
 	return row[i]
 }
 
-// ParseReqRefs expands "R1, R3–R5" into [R1 R3 R4 R5].
+// ParseReqRefs expands "R1, R3–R5" into [R1 R3 R4 R5] and "R26a–R26c" into
+// [R26a R26b R26c]. A range of numbers does not list the lettered requirements
+// inside it: "R25–R27" is R25, R26, R27, without R26a.
 func ParseReqRefs(s string) []string {
 	var out []string
 	seen := map[string]bool{}
+	add := func(id string) {
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
 	for _, m := range reqRefRe.FindAllStringSubmatch(s, -1) {
 		a, _ := strconv.Atoi(m[1])
-		b := a
-		if m[2] != "" {
-			b, _ = strconv.Atoi(m[2])
+		add("R" + m[1] + m[2])
+		if m[3] == "" {
+			continue
 		}
+		b, _ := strconv.Atoi(m[3])
 		if b < a || b-a > 200 {
-			b = a
+			continue
 		}
-		for n := a; n <= b; n++ {
-			id := "R" + strconv.Itoa(n)
-			if !seen[id] {
-				seen[id] = true
-				out = append(out, id)
+		if a == b {
+			from := byte('a')
+			if m[2] != "" {
+				from = m[2][0] + 1
 			}
+			for l := from; m[4] != "" && l <= m[4][0]; l++ {
+				add("R" + m[1] + string(l))
+			}
+			continue
+		}
+		for n := a + 1; n <= b; n++ {
+			add("R" + strconv.Itoa(n))
+		}
+		if m[4] != "" {
+			add("R" + m[3] + m[4])
 		}
 	}
 	return out
