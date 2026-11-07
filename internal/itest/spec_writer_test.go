@@ -344,6 +344,7 @@ func TestSpecWriterWayBack(t *testing.T) {
 	if !strings.Contains(toolMsg(err), "from the chat of the feature") {
 		t.Fatal(toolMsg(err))
 	}
+	// RQ-02 (FTR.HMR.DEV-0001 qa): an instruction from another topic is refused.
 	_, err = r.brief(r.anna, f, "другая", agent.SpecBrief{Areas: []string{"product"}})
 	if !strings.Contains(toolMsg(err), "Open the Specification tab") {
 		t.Fatal(toolMsg(err))

@@ -2,7 +2,7 @@ package specindex
 
 import "testing"
 
-// API-01–API-03 (FTR.HMR.SPEC-0001 qa): the history of a file at GitHub and
+// API-01, API-02, API-03 (FTR.HMR.SPEC-0001 qa): the history of a file at GitHub and
 // GitLab; no link when the path or the form of the commit URL is unknown.
 func TestHistoryURL(t *testing.T) {
 	cases := []struct{ name, commit, path, want string }{

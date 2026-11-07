@@ -240,6 +240,7 @@ func TestCycle(t *testing.T) {
 	if newKey != is.Key {
 		t.Fatal("move into the same domain changed the key")
 	}
+	// DSC-05 (FTR.HMR.CMN-0002 qa): a rejection needs a reason.
 	tu.Code(t, iss.Reject(ctx, p, is.Key, " "), 422, "reason_required")
 
 	// A feature linked to the issue with two services and their PRs (as after codegen).
