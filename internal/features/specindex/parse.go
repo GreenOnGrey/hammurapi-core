@@ -363,7 +363,7 @@ type Reference struct {
 	Snippet string
 }
 
-var refRe = regexp.MustCompile(`FTR\.[A-Z][A-Z0-9]{1,9}\.[A-Z][A-Z0-9]{1,9}-\d{4}(?:-` + markdown.ReqID + `)?`)
+var refRe = regexp.MustCompile(markdown.FeatureKey + `(?:-` + markdown.ReqID + `)?`)
 
 // References lists mentions of features and requirements outside code blocks;
 // mentions of the document's own feature are skipped.

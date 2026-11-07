@@ -33,6 +33,27 @@ func (s *Service) Routes(r chi.Router) {
 			httpx.JSON(w, http.StatusOK, t)
 			return nil
 		}))
+		r.Get("/graph", httpx.Handler(func(w http.ResponseWriter, r *http.Request) error {
+			// FTR.HMR.DEV-0002 R15: the whole graph in one answer, cached by the version of the index.
+			tag, err := s.IndexTag(r.Context())
+			if err != nil {
+				return err
+			}
+			etag := `"` + tag + `"`
+			if r.Header.Get("If-None-Match") == etag {
+				w.WriteHeader(http.StatusNotModified)
+				return nil
+			}
+			q := r.URL.Query()
+			g, err := s.SpecGraph(r.Context(), GraphQuery{Domain: q.Get("domain"), System: q.Get("system"), Kind: q.Get("kind")})
+			if err != nil {
+				return err
+			}
+			g.Commit = tag
+			w.Header().Set("ETag", etag)
+			httpx.JSON(w, http.StatusOK, g)
+			return nil
+		}))
 		r.Get("/documents/{key}/{area}", httpx.Handler(func(w http.ResponseWriter, r *http.Request) error {
 			d, err := s.Document(r.Context(), chi.URLParam(r, "key"), chi.URLParam(r, "area"))
 			if err != nil {

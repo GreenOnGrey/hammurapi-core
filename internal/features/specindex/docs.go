@@ -3,6 +3,7 @@ package specindex
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"mime"
 	"path"
@@ -107,7 +108,7 @@ func shaMap(ctx context.Context, q postgres.Querier, sql string) (map[string]str
 }
 
 // writeDocument stores a spec.md with its title, contents, search vector,
-// requirements (product only) and references — recomputed together.
+// requirements and links (product only) and references — recomputed together.
 func (s *Service) writeDocument(ctx context.Context, tx pgx.Tx, loc Loc, blobSHA, commit, md string) error {
 	title := Title(md)
 	toc := TOC(md)
@@ -158,6 +159,11 @@ func (s *Service) writeDocument(ctx context.Context, tx pgx.Tx, loc Loc, blobSHA
 			}
 		}
 	}
+	if loc.Area == "product" {
+		if err := writeLinks(ctx, tx, loc.Folder, p, md); err != nil {
+			return err
+		}
+	}
 	for _, r := range References(md, loc.Folder) {
 		if _, err := tx.Exec(ctx, `INSERT INTO spec_references (source_path, source_key, area, section, target_key, target_req, snippet)
 			VALUES ($1, $2, $3, NULLIF($4, ''), $5, NULLIF($6, ''), $7)`, p, loc.Folder, loc.Area, r.Section, r.Target, r.Req, r.Snippet); err != nil {
@@ -194,4 +200,71 @@ func mimeOf(p string) string {
 		return t
 	}
 	return "application/octet-stream"
+}
+
+// writeLinks recomputes the links of a feature from its product document
+// (FTR.HMR.DEV-0002 R13, tech §6): the old rows go, the new ones come in the
+// same transaction as the document.
+func writeLinks(ctx context.Context, q postgres.Querier, key, path, md string) error {
+	if _, err := q.Exec(ctx, `DELETE FROM spec_links WHERE source_key = $1`, key); err != nil {
+		return err
+	}
+	parent, _ := Parent(md) // a broken front matter is reported by the check, here it is no parent
+	for _, l := range Links(md, key, parent) {
+		if _, err := q.Exec(ctx, `INSERT INTO spec_links (source_key, target_key, kind, requirements, source_path)
+			VALUES ($1, $2, $3, $4, $5)`, key, l.Target, l.Kind, l.Requirements, path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// errScanBusy: a check of the repository holds the lock; the backfill waits for the next tick.
+var errScanBusy = errors.New("a check of the specification repository is running")
+
+// BackfillLinks fills spec_links from the product documents of the index when
+// the table is empty (FTR.HMR.DEV-0002 tech §6.1): the index of an earlier
+// version has documents but no links. It runs under the lock of the checks and
+// locks the documents it reads, so a check or a push does not interleave with
+// it; running it again changes nothing.
+func (s *Service) BackfillLinks(ctx context.Context) (int, error) {
+	n := 0
+	err := postgres.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		var locked, empty bool
+		if err := tx.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock(`+lockKey+`), NOT EXISTS (SELECT 1 FROM spec_links)`).Scan(&locked, &empty); err != nil {
+			return err
+		}
+		if !locked {
+			return errScanBusy
+		}
+		if !empty {
+			return nil
+		}
+		rows, err := tx.Query(ctx, `SELECT feature_key, path, markdown FROM spec_documents WHERE area = 'product' ORDER BY path FOR UPDATE`)
+		if err != nil {
+			return err
+		}
+		type doc struct{ key, path, md string }
+		var docs []doc
+		for rows.Next() {
+			var d doc
+			if err := rows.Scan(&d.key, &d.path, &d.md); err != nil {
+				rows.Close()
+				return err
+			}
+			docs = append(docs, d)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		for _, d := range docs {
+			if err := writeLinks(ctx, tx, d.key, d.path, d.md); err != nil {
+				return err
+			}
+		}
+		n = len(docs)
+		return nil
+	})
+	return n, err
 }

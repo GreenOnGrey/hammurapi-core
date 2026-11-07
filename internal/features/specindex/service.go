@@ -3,6 +3,8 @@ package specindex
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -244,12 +246,26 @@ func (s *Service) RunOnce(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-// Run is the worker loop: the schedule every minute, the queue every few seconds.
+// Run is the worker loop: links of an earlier index filled once, then the
+// schedule every minute, the queue every few seconds.
 func (s *Service) Run(ctx context.Context) error {
 	tick := time.NewTicker(5 * time.Second)
 	defer tick.Stop()
 	var lastSchedule time.Time
+	backfilled := false
 	for {
+		if !backfilled { // tried on every tick until a check does not hold the lock
+			n, err := s.BackfillLinks(ctx)
+			switch {
+			case err == nil:
+				backfilled = true
+				if n > 0 {
+					slog.InfoContext(ctx, "spec links backfilled", "documents", n)
+				}
+			case !errors.Is(err, errScanBusy) && ctx.Err() == nil:
+				logWarn(ctx, "spec links backfill", err)
+			}
+		}
 		if s.now().Sub(lastSchedule) >= time.Minute {
 			lastSchedule = s.now()
 			if err := s.scheduleDue(ctx); err != nil && ctx.Err() == nil {
