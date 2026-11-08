@@ -170,7 +170,99 @@ func (s *Service) Tools() []mcp.Tool {
 				return asJSON(out)
 			},
 		},
+		{
+			Name: "spec_links",
+			Description: "Declared links between features of the default branch (FTR.HMR.DEV-0002): what a feature builds on (its header «Опирается на»), " +
+				"which requirements of other features it changes (its section «Изменения в других решениях»), and the same the other way round. " +
+				"With featureKey — the four lists of that feature: extends, changes, extendedBy, changedBy, each item with key, title, requirements " +
+				"and indexed (false: the key is not in the default branch). Without featureKey — the graph: features and edges, narrowed by domain, " +
+				"system and kind; a graph larger than the limit of spec_read asks to narrow it. Unlike spec_references, which finds every mention, these are dependencies.",
+			Modes: allModes, ReadOnly: true,
+			InputSchema: schema(map[string]any{"featureKey": str("FTR.<DOMAIN>.<SYSTEM>-NNNN; omit for the graph"),
+				"domain": str("Domain key, for the graph"), "system": str("System key, for the graph"),
+				"kind": map[string]any{"type": "string", "enum": []string{LinkExtends, LinkChanges}, "description": "Only links of this kind"}}),
+			Handler: func(ctx context.Context, _ mcp.Grant, raw json.RawMessage) (string, error) {
+				var a struct{ FeatureKey, Domain, System, Kind string }
+				if err := json.Unmarshal(raw, &a); err != nil {
+					return "", &mcp.ToolError{Msg: "bad arguments"}
+				}
+				if a.Kind != "" && a.Kind != LinkExtends && a.Kind != LinkChanges {
+					return "", &mcp.ToolError{Msg: "kind is extends or changes"}
+				}
+				if a.FeatureKey != "" {
+					if a.Domain != "" || a.System != "" {
+						return "", &mcp.ToolError{Msg: "domain and system narrow the graph; with featureKey only kind applies"}
+					}
+					out, err := s.LinksOf(ctx, strings.ToUpper(strings.TrimSpace(a.FeatureKey)), a.Kind)
+					if err != nil {
+						return "", err
+					}
+					return asJSON(out)
+				}
+				g, err := s.SpecGraph(ctx, GraphQuery{Domain: strings.ToUpper(a.Domain), System: strings.ToUpper(a.System), Kind: a.Kind})
+				if err != nil {
+					return "", err
+				}
+				type node struct {
+					Key     string  `json:"key"`
+					Title   *string `json:"title"`
+					Indexed bool    `json:"indexed"`
+					Context bool    `json:"context,omitempty"`
+				}
+				nodes := make([]node, 0, len(g.Nodes))
+				for _, n := range g.Nodes {
+					nodes = append(nodes, node{Key: n.Key, Title: n.Title, Indexed: n.Indexed, Context: n.Context})
+				}
+				out, err := asJSON(map[string]any{"features": nodes, "edges": g.Edges})
+				if err == nil && len(out) > s.cfg.AgentReadMaxChars { // the context of the agent, as spec_read (CMN-0005 R19)
+					return "", &mcp.ToolError{Msg: fmt.Sprintf("the graph has %d features and %d links, too many for one answer: narrow it by domain, system or kind, or ask by featureKey", len(nodes), len(g.Edges))}
+				}
+				return out, err
+			},
+		},
 	}
+}
+
+// LinksResult is the answer of spec_links for one feature.
+type LinksResult struct {
+	FeatureKey string  `json:"featureKey"`
+	Title      *string `json:"title"`
+	Indexed    bool    `json:"indexed"`
+	FeatureLinks
+}
+
+// LinksOf returns the links of a feature for the agent (FTR.HMR.DEV-0002 R18); kind keeps one kind.
+// A key outside the index with links to it is answered: the agent learns who refers to it (R17).
+func (s *Service) LinksOf(ctx context.Context, key, kind string) (*LinksResult, error) {
+	if m := targetRe.FindStringSubmatch(key); m == nil || m[2] != "" {
+		return nil, &mcp.ToolError{Msg: "featureKey is FTR.<DOMAIN>.<SYSTEM>-NNNN"}
+	}
+	if kind != "" && kind != LinkExtends && kind != LinkChanges {
+		return nil, &mcp.ToolError{Msg: "kind is extends or changes"}
+	}
+	l, err := s.featureLinks(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	out := &LinksResult{FeatureKey: key, FeatureLinks: *l}
+	if err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM spec_documents WHERE feature_key = $1),
+		(SELECT title FROM features WHERE unique_id = $1)`, key).Scan(&out.Indexed, &out.Title); err != nil {
+		return nil, err
+	}
+	if !out.Indexed {
+		out.Title = nil
+		if len(l.Extends)+len(l.Changes)+len(l.ExtendedBy)+len(l.ChangedBy) == 0 {
+			// the key has no document in any area: notFound answers "not in the index" with similar keys
+			return nil, s.notFound(ctx, key, "product")
+		}
+	}
+	switch kind {
+	case LinkExtends:
+		out.Changes, out.ChangedBy = []LinkRef{}, []LinkRef{}
+	case LinkChanges:
+		out.Extends, out.ExtendedBy = []LinkRef{}, []LinkRef{}
+	}
+	return out, nil
 }
 
 // ReadResult is the answer of spec_read.

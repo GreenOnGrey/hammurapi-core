@@ -14,11 +14,12 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/specindex"
+	"github.com/GreenOnGrey/hammurapi-core/internal/platform/mcp"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/postgres"
 )
 
-// FTR.HMR.DEV-0002 R13–R17: links of features in the index, in the header of a
-// document and in the graph.
+// FTR.HMR.DEV-0002 R13–R18: links of features in the index, in the header of a
+// document, in the graph and in the agent's tool spec_links.
 func TestSpecLinks(t *testing.T) {
 	ctx := context.Background()
 	url, drop, err := freshDB(ctx, "speclinks")
@@ -94,6 +95,78 @@ func TestSpecLinks(t *testing.T) {
 		l.ChangedBy[0].Key != "FTR.FMS.CAR-0042" || strings.Join(l.ChangedBy[0].Requirements, ",") != "R13" {
 		b, _ := json.Marshal(l)
 		t.Fatalf("links of 0002 %s", b)
+	}
+
+	// LINK-09…LINK-12: the agent's tool spec_links (R18), read-only in every mode.
+	var linksTool mcp.Tool
+	for _, tl := range svc.Tools() {
+		if tl.Name == "spec_links" {
+			linksTool = tl
+		}
+	}
+	allModes := []string{mcp.ModeGeneral, mcp.ModeSpec, mcp.ModeDiscovery, mcp.ModeGenerate, mcp.ModeCheck, mcp.ModeTask, mcp.ModeNabu}
+	if linksTool.Handler == nil || !linksTool.ReadOnly || !reflect.DeepEqual(linksTool.Modes, allModes) {
+		t.Fatalf("spec_links is offered read-only in every mode with Nabu: %+v", linksTool.Modes)
+	}
+	callLinks := func(args map[string]any) (string, error) {
+		raw, _ := json.Marshal(args)
+		return linksTool.Handler(ctx, mcp.Grant{}, raw)
+	}
+	linksOf := func(args map[string]any) specindex.LinksResult {
+		t.Helper()
+		out, err := callLinks(args)
+		must(t, err)
+		var r specindex.LinksResult
+		must(t, json.Unmarshal([]byte(out), &r))
+		return r
+	}
+	keys := func(refs []specindex.LinkRef) string {
+		var out []string
+		for _, r := range refs {
+			out = append(out, r.Key+" "+strings.Join(r.Requirements, ","))
+		}
+		return strings.TrimSpace(strings.Join(out, ";"))
+	}
+	// LINK-09: by key, any case; the feature's own title and the four lists
+	r9 := linksOf(map[string]any{"featureKey": "ftr.fms.car-0002"})
+	if r9.FeatureKey != "FTR.FMS.CAR-0002" || !r9.Indexed || r9.Title == nil || *r9.Title != "Booking" ||
+		keys(r9.ExtendedBy) != "FTR.FMS.CAR-0042" || keys(r9.ChangedBy) != "FTR.FMS.CAR-0042 R13" ||
+		r9.ChangedBy[0].Title == nil || *r9.ChangedBy[0].Title != "Weekend tariffs" || len(r9.Extends)+len(r9.Changes) != 0 {
+		t.Fatalf("spec_links of 0002 %+v", r9)
+	}
+	// LINK-10: one kind
+	r10 := linksOf(map[string]any{"featureKey": "FTR.FMS.CAR-0042", "kind": "changes"})
+	if keys(r10.Changes) != "FTR.FMS.CAR-0002 R13" || len(r10.Extends) != 0 || keys(r10.ChangedBy) != "FTR.FMS.CAR-0043" {
+		t.Fatalf("spec_links of 0042, changes only %+v", r10)
+	}
+	// LINK-11: outside the index but referred to; an unknown key
+	r11 := linksOf(map[string]any{"featureKey": "FTR.FMS.CAR-0077"})
+	if r11.Indexed || r11.Title != nil || keys(r11.ExtendedBy) != "FTR.FMS.CAR-0042" {
+		t.Fatalf("spec_links of a key outside the index %+v", r11)
+	}
+	if _, err := callLinks(map[string]any{"featureKey": "FTR.FMS.CAR-0099"}); err == nil || !strings.Contains(err.Error(), "not_found") {
+		t.Fatalf("an unknown key is not_found: %v", err)
+	}
+	if _, err := callLinks(map[string]any{"featureKey": "FTR.FMS.CAR-0002", "domain": "LOG"}); err == nil {
+		t.Fatal("a key with a filter of the graph is refused")
+	}
+	// LINK-12: the graph narrowed by domain; an unknown kind
+	out, err := callLinks(map[string]any{"domain": "log"})
+	must(t, err)
+	var graph struct {
+		Features []struct {
+			Key     string `json:"key"`
+			Context bool   `json:"context"`
+		} `json:"features"`
+		Edges []specindex.GraphEdge `json:"edges"`
+	}
+	must(t, json.Unmarshal([]byte(out), &graph))
+	if len(graph.Edges) != 1 || graph.Edges[0].Source != "FTR.FMS.CAR-0042" || graph.Edges[0].Target != "FTR.LOG.DLV-0003" ||
+		len(graph.Features) != 2 || graph.Features[0].Key != "FTR.FMS.CAR-0042" || !graph.Features[0].Context || graph.Features[1].Context {
+		t.Fatalf("spec_links graph of LOG %s", out)
+	}
+	if _, err := callLinks(map[string]any{"kind": "mentions"}); err == nil {
+		t.Fatal("an unknown kind is refused")
 	}
 
 	// GRAPH-01: the domain LOG and the features linked to it as context.
