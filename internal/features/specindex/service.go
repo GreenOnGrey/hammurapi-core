@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/GreenOnGrey/speclint/contract"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -246,7 +247,7 @@ func (s *Service) RunOnce(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-// Run is the worker loop: links of an earlier index filled once, then the
+// Run is the worker loop: an index of another contract read again once, then the
 // schedule every minute, the queue every few seconds.
 func (s *Service) Run(ctx context.Context) error {
 	tick := time.NewTicker(5 * time.Second)
@@ -255,15 +256,15 @@ func (s *Service) Run(ctx context.Context) error {
 	backfilled := false
 	for {
 		if !backfilled { // tried on every tick until a check does not hold the lock
-			n, err := s.BackfillLinks(ctx)
+			n, err := s.ReindexContract(ctx)
 			switch {
 			case err == nil:
 				backfilled = true
 				if n > 0 {
-					slog.InfoContext(ctx, "spec links backfilled", "documents", n)
+					slog.InfoContext(ctx, "spec index read again by the document contract", "documents", n, "contract", contract.Version)
 				}
 			case !errors.Is(err, errScanBusy) && ctx.Err() == nil:
-				logWarn(ctx, "spec links backfill", err)
+				logWarn(ctx, "spec index contract reindex", err)
 			}
 		}
 		if s.now().Sub(lastSchedule) >= time.Minute {

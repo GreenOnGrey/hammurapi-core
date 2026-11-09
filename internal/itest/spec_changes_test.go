@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GreenOnGrey/speclint/contract"
 	"github.com/google/uuid"
 	"go.uber.org/mock/gomock"
 
@@ -314,12 +315,12 @@ func TestSpecChangeNotes(t *testing.T) {
 	gp := repo.provider(t)
 	tokens := mocks.NewMockTokenSource(gomock.NewController(t))
 	tokens.EXPECT().Token(gomock.Any(), gomock.Any()).Return("tok", nil).AnyTimes()
-	changes := &specchanges.Service{Q: db, Git: gp}
+	changes := &specchanges.Service{Q: db, Git: gp, Lang: contract.RU}
 	gs := gates.NewService(store, gp, tokens, nopEvents{}, nil, "main")
 	gs.Changes = changes
 	items := func() map[string]specchanges.Item {
 		t.Helper()
-		list, err := gs.SpecChanges(ctx, expert, f.UniqueID)
+		list, err := gs.SpecChanges(ctx, expert, f.UniqueID, domain.AreaProduct)
 		must(t, err)
 		out := map[string]specchanges.Item{}
 		for _, it := range list {
@@ -376,8 +377,8 @@ func TestSpecChangeNotes(t *testing.T) {
 	// SAVE-04: the writer gets the reasons and no revision is taken.
 	var sunk int
 	tools := map[string]mcp.Tool{}
-	for _, tl := range agent.Tools(agent.ToolDeps{CheckChanges: func(ctx context.Context, key, product string) (string, error) {
-		errs, err := changes.Check(ctx, key, product)
+	for _, tl := range agent.Tools(agent.ToolDeps{CheckChanges: func(ctx context.Context, key, area, doc string) (string, error) {
+		errs, err := changes.Check(ctx, key, area, doc)
 		if err != nil || len(errs) == 0 {
 			return "", err
 		}

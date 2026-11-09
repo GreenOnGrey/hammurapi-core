@@ -11,6 +11,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/GreenOnGrey/speclint/contract"
 	"go.yaml.in/yaml/v3"
 
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/markdown"
@@ -358,12 +359,13 @@ func Requirements(md string) []Requirement {
 // Reference is a mention of a feature or a requirement in a document.
 type Reference struct {
 	Target  string // FTR.FMS.CAR-0002
-	Req     string // R3 or ""
+	Req     string // R3, A5 or ""
 	Section string
 	Snippet string
 }
 
-var refRe = regexp.MustCompile(markdown.FeatureKey + `(?:-` + markdown.ReqID + `)?`)
+// refRe is a key with a requirement R<n> or a decision A<n> (FTR.HMR.DEV-0003 R10).
+var refRe = regexp.MustCompile(markdown.FeatureKey + `(?:-(?:` + markdown.ReqID + `|` + contract.DecisionID + `))?`)
 
 // References lists mentions of features and requirements outside code blocks;
 // mentions of the document's own feature are skipped.
@@ -379,7 +381,7 @@ func References(md, self string) []Reference {
 		for _, m := range refRe.FindAllStringIndex(l.text, -1) {
 			id := l.text[m[0]:m[1]]
 			target, req := id, ""
-			if k := strings.LastIndex(id, "-R"); k > 0 && strings.Count(id, "-") == 2 {
+			if k := strings.LastIndex(id, "-"); k > 0 && strings.Count(id, "-") == 2 {
 				target, req = id[:k], id[k+1:]
 			}
 			if target == self {

@@ -98,7 +98,7 @@ func (s *Service) Submit(ctx context.Context, p *domain.Principal, uniqueID stri
 	if err := s.checkRun(ctx, f, area); err != nil {
 		return nil, err
 	}
-	if area == domain.AreaProduct && !force {
+	if (area == domain.AreaProduct || area == domain.AreaArch) && !force {
 		token, err := s.tokens.Token(ctx, p.UserID)
 		if err != nil {
 			return nil, err
@@ -107,19 +107,25 @@ func (s *Service) Submit(ctx context.Context, p *domain.Principal, uniqueID stri
 		if err != nil && !errors.Is(err, git.ErrNotFound) {
 			return nil, auth.MapGitError(err)
 		}
-		if doc != nil {
+		if doc != nil && area == domain.AreaProduct {
 			if u := markdown.UnnumberedRequirements(string(doc.Content)); len(u) > 0 {
 				return nil, apperr.Conflict("requirements_without_id", "some requirements have no ID; ask the agent to number them or submit anyway").
 					With("requirements", u)
 			}
 		}
+		if doc != nil && area == domain.AreaArch { // FTR.HMR.DEV-0003 R16: decisions without A<n>
+			if u := markdown.UnnumberedDecisions(string(doc.Content)); len(u) > 0 {
+				return nil, apperr.Conflict("decisions_without_id", "some decisions have no number A<n>; ask the agent to number them or submit anyway").
+					With("decisions", u)
+			}
+		}
 	}
 	var changesToken string
-	if area == domain.AreaProduct && s.Changes != nil { // FTR.HMR.DEV-0002 R3: wrong rows refuse before anything is written
+	if specchanges.Supported(string(area)) && s.Changes != nil { // FTR.HMR.DEV-0002 R3: wrong rows refuse before anything is written
 		if changesToken, err = s.tokens.Token(ctx, p.UserID); err != nil {
 			return nil, err
 		}
-		if err := s.Changes.Verify(ctx, changesToken, f); err != nil {
+		if err := s.Changes.Verify(ctx, changesToken, f, string(area)); err != nil {
 			return nil, auth.MapGitError(err)
 		}
 	}
@@ -127,7 +133,7 @@ func (s *Service) Submit(ctx context.Context, p *domain.Principal, uniqueID stri
 		return nil, err
 	}
 	if changesToken != "" { // R6: the notes in one commit right before the gate is in review
-		if err := s.Changes.Ensure(ctx, changesToken, f); err != nil {
+		if err := s.Changes.Ensure(ctx, changesToken, f, string(area)); err != nil {
 			return nil, auth.MapGitError(err)
 		}
 	}

@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/GreenOnGrey/hammurapi-core/internal/apperr"
 	"github.com/GreenOnGrey/hammurapi-core/internal/domain"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/httpx"
 )
@@ -27,13 +28,22 @@ func (h *Handlers) Routes(r chi.Router) {
 	r.Get("/features/{uniqueId}/spec/changes", httpx.Handler(h.changes))
 }
 
-// changes is GET /features/{uniqueId}/spec/changes (FTR.HMR.DEV-0002 tech §2.1).
+// changes is GET /features/{uniqueId}/spec/changes?area=product|arch
+// (FTR.HMR.DEV-0002 tech §2.1, FTR.HMR.DEV-0003 tech §2.5): product by default.
 func (h *Handlers) changes(w http.ResponseWriter, r *http.Request) error {
 	p, err := httpx.MustPrincipal(r)
 	if err != nil {
 		return err
 	}
-	items, err := h.svc.SpecChanges(r.Context(), p, chi.URLParam(r, "uniqueId"))
+	area := domain.AreaProduct
+	switch a := r.URL.Query().Get("area"); a {
+	case "", string(domain.AreaProduct):
+	case string(domain.AreaArch):
+		area = domain.AreaArch
+	default:
+		return apperr.BadRequest("invalid_area", "area must be product or arch")
+	}
+	items, err := h.svc.SpecChanges(r.Context(), p, chi.URLParam(r, "uniqueId"), area)
 	if err != nil {
 		return err
 	}

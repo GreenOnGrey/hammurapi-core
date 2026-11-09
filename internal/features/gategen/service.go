@@ -174,13 +174,17 @@ func (s *Service) Advance(ctx context.Context, p *domain.Principal, key string) 
 	if err != nil {
 		return "", err
 	}
-	// FTR.HMR.DEV-0002 R3, R6: the notes are aligned before any next stage, the legacy one too
-	if s.Changes != nil && slices.ContainsFunc(all, func(g specdata.Gate) bool { return g.Area == domain.AreaProduct }) {
+	// FTR.HMR.DEV-0002 R3, R6, FTR.HMR.DEV-0003 R14: the notes are aligned before any next stage, the legacy one too
+	for _, name := range specchanges.Areas {
+		a := domain.Area(name)
+		if s.Changes == nil || !slices.ContainsFunc(all, func(g specdata.Gate) bool { return g.Area == a }) {
+			continue
+		}
 		token, err := s.Tokens.Token(ctx, p.UserID)
 		if err != nil {
 			return "", err
 		}
-		if err := s.Changes.Ensure(ctx, token, f); err != nil {
+		if err := s.Changes.Ensure(ctx, token, f, string(a)); err != nil {
 			return "", auth.MapGitError(err)
 		}
 	}

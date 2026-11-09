@@ -999,13 +999,20 @@ func (e *Effects) run(ctx context.Context, run workflows.RunRef, featureID uuid.
 	written, docChanges := documentChanges(f, req.Areas, out.Results, files)
 	changes = append(changes, docChanges...)
 	var notes []git.FileChange
-	if s, ok := out.Results[domain.AreaProduct]; ok && slices.Contains(written, domain.AreaProduct) && e.Changes != nil {
+	for _, name := range specchanges.Areas { // FTR.HMR.DEV-0003 R14: arch too
+		a := domain.Area(name)
+		s, ok := out.Results[a]
+		if !ok || !slices.Contains(written, a) || e.Changes == nil {
+			continue
+		}
 		// submit_gate refused wrong rows; one the index lost since then gets no note
-		if notes, _, err = e.Changes.Align(ctx, token, f, s.Content); err != nil {
+		n, _, err := e.Changes.Align(ctx, token, f, string(a), s.Content)
+		if err != nil {
 			return nil, err
 		}
-		changes = append(changes, notes...)
+		notes = append(notes, n...)
 	}
+	changes = append(changes, notes...)
 	if len(changes) == 0 {
 		return out, nil
 	}

@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GreenOnGrey/speclint/contract"
+
 	"github.com/GreenOnGrey/hammurapi-core/internal/apperr"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/postgres"
 )
@@ -59,7 +61,8 @@ func (s *Service) IndexTag(ctx context.Context) (string, error) {
 		return "", err
 	}
 	h := sha1.New() //nolint:gosec
-	fmt.Fprintf(h, "%d|%d|", n, links)
+	// the version of the contract too: reading the index again by a new contract changes no document (FTR.HMR.DEV-0003 tech §4.2)
+	fmt.Fprintf(h, "%s|%d|%d|", contract.Version, n, links)
 	if last != nil {
 		fmt.Fprint(h, last.UnixNano())
 	}
@@ -223,7 +226,11 @@ func (s *Service) Document(ctx context.Context, key, area string) (*Document, er
 	if err != nil {
 		return nil, err
 	}
-	if info.Links, err = s.featureLinks(ctx, key); err != nil {
+	layer := LayerProduct // FTR.HMR.DEV-0003 R15: the links of the layer of the open area
+	if area == LayerArch {
+		layer = LayerArch
+	}
+	if info.Links, err = s.featureLinks(ctx, key, layer); err != nil {
 		return nil, err
 	}
 	d.Feature = *info
