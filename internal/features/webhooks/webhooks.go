@@ -130,6 +130,13 @@ type Processor struct {
 	Skills SkillsSync
 	// Specs updates the specification index on pushes to the default branch (FTR.HMR.CMN-0005 R17).
 	Specs SpecPushes
+	// Rules checks the templates against the document contract after a push to rules/ (FTR.HMR.DEV-0003 R20).
+	Rules RulesPushes
+}
+
+// RulesPushes is the check of the rules as the push processor uses it.
+type RulesPushes interface {
+	RulesPushed(ctx context.Context, branch string, paths []string) error
 }
 
 // SpecPushes is the specification index as the push processor uses it.
@@ -178,13 +185,24 @@ func (p *Processor) Dispatch(ctx context.Context, ev *git.HookEvent) error {
 			if err := p.Apply(ctx, push); err != nil {
 				return err
 			}
+			var paths []string
+			truncated := len(push.Commits) >= 20 // GitHub lists at most 20 commits of a push
+			for _, c := range push.Commits {
+				paths = append(append(append(paths, c.Added...), c.Modified...), c.Removed...)
+				truncated = truncated || len(c.Added)+len(c.Modified)+len(c.Removed) == 0
+			}
 			if p.Skills != nil {
-				var paths []string
-				for _, c := range push.Commits {
-					paths = append(append(append(paths, c.Added...), c.Modified...), c.Removed...)
-				}
 				if err := p.Skills.SkillsChanged(ctx, push.Branch, paths); err != nil {
 					slog.ErrorContext(ctx, "agent skills snapshot", "err", err)
+				}
+			}
+			if p.Rules != nil {
+				rulePaths := paths
+				if truncated { // the files of the push are not all known: check every template
+					rulePaths = append(rulePaths, "rules/")
+				}
+				if err := p.Rules.RulesPushed(ctx, push.Branch, rulePaths); err != nil {
+					slog.ErrorContext(ctx, "rules contract check", "err", err) // the next start of the worker checks again
 				}
 			}
 			if p.Specs != nil {

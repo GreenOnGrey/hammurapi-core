@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GreenOnGrey/speclint/contract"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -78,6 +79,9 @@ type Service struct {
 	git           git.Provider
 	tokens        git.TokenSource
 	defaultBranch string
+	// Lang is the language of the documents: of the starter rules and of the
+	// description of the contract (FTR.HMR.DEV-0003 R23).
+	Lang contract.Lang
 }
 
 // NewService creates the service.
@@ -137,6 +141,9 @@ func (s *Service) Propose(ctx context.Context, p *domain.Principal, area domain.
 	dbf, ok := dbFile(in.File)
 	if !ok {
 		return nil, apperr.Unprocessable("invalid_file", "file must be template or fix-template")
+	}
+	if err := CheckContent("propose", area, in.File, in.Content); err != nil { // FTR.HMR.DEV-0003 R19
+		return nil, err
 	}
 	var open int
 	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM rule_changes WHERE area = $1 AND file = $2 AND status = 'open'`, area, dbf).Scan(&open); err != nil {
@@ -338,6 +345,15 @@ func (s *Service) Approve(ctx context.Context, p *domain.Principal, id uuid.UUID
 	if err != nil {
 		return nil, err
 	}
+	// FTR.HMR.DEV-0003 R19: the file of the change is checked again; the change replaces
+	// the whole file, so the file of its branch is what the merge brings
+	content, err := s.read(ctx, token, c.Branch, git.RulePath(string(c.Area), c.File == FileFixTemplate))
+	if err != nil {
+		return nil, err
+	}
+	if err := CheckContent("approve", c.Area, c.File, content); err != nil {
+		return nil, err
+	}
 	if err := s.git.ApprovePR(ctx, token, c.PRNumber); err != nil {
 		// Approval rules may be disabled in the provider; the merge below is authoritative.
 		slog.WarnContext(ctx, "provider approval failed", "pr", c.PRNumber, "err", err)
@@ -385,6 +401,7 @@ func (s *Service) Withdraw(ctx context.Context, p *domain.Principal, id uuid.UUI
 // Routes mounts /admin/api/v1/rules.
 func (s *Service) Routes(r chi.Router) {
 	// Static paths first so "changes" is not taken as an area.
+	s.contractRoutes(r)
 	r.Get("/rules/changes", httpx.Handler(func(w http.ResponseWriter, r *http.Request) error {
 		p, err := httpx.MustPrincipal(r)
 		if err != nil {

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GreenOnGrey/speclint/contract"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
@@ -705,6 +706,8 @@ type Effects struct {
 	Timeout       time.Duration
 	// Changes puts the notes of a written product document into the commit of the run (FTR.HMR.DEV-0002 R4); nil — none.
 	Changes *specchanges.Service
+	// Lang is the language of the documents (FTR.HMR.DEV-0003 R22).
+	Lang contract.Lang
 }
 
 // Submission is what the writer submitted for an area.
@@ -733,6 +736,8 @@ type PromptData struct {
 	Requests  []SpecRequest
 	History   []SpecRequest
 	Questions map[domain.Area]GateQuestions
+	// Lang is the language of the documents: the words of the contract the writer writes (FTR.HMR.DEV-0003 R21, R22).
+	Lang contract.Lang
 }
 
 // IssueDiscovery is the Discovery of an issue of the feature (R3).
@@ -805,6 +810,10 @@ func Prompt(f *specdata.Feature, req Request, d PromptData) string {
 				fmt.Fprintf(&b, "- %s (for the %s experts): %s. Recommended: %s\n", x.ID, audienceOf(a, x), x.Title, x.Recommended)
 			}
 		}
+		// FTR.HMR.DEV-0003 R21: the contract apart from the template; it wins when they disagree
+		if c := contract.Prompt(contract.Area(a), contract.ParseLang(string(d.Lang))); c != "" {
+			fmt.Fprintf(&b, "\n=== document contract for %s ===\n%s", a, c)
+		}
 		if t, ok := d.Templates[a]; ok {
 			fmt.Fprintf(&b, "\n=== rules template for %s ===\n%s\n", a, t)
 		}
@@ -842,6 +851,7 @@ Questions:
 Other gates: you may submit another gate only when a brief names it or an expert allowed it with an answer. If you see a problem in another gate, do not change it: ask a question with touches naming it.
 Manual revisions of experts in the documents stay unless a brief says otherwise.
 Changes to other features (FTR.HMR.DEV-0002 R1–R3): if product changes behavior described in requirements of other features of the default branch, list them in the section "Изменения в других решениях" of product as a table | Решение | Требование | Что изменилось |: the full key, one requirement R<n> per row or "всё решение", what changed in one sentence; a cancelled requirement says "требование больше не действует". Find them with spec_search, spec_requirements and spec_references; spec_links shows which features already build on a feature or change it (R18). Unsure whether a requirement is changed or only extended: ask a question with a recommendation. A feature still in work is not changed here: its change goes through an instruction in its own topic. Do not write a line "Меняет:". Hammurapi puts the notes "Изменено в …" into the changed features: do not write them yourself.
+Changes of architecture (FTR.HMR.DEV-0003 R12, R13): if arch changes architecture decisions A<n> of other features of the default branch, list them in the section of changes of arch (see the document contract of arch): one decision A<n> per row. Find them with spec_search, spec_read, spec_requirements with kind decision, spec_references and spec_links. Unsure whether a decision is changed or only extended: ask a question with a recommendation. Arch changes only decisions A<n>; a change of behaviour goes to the section of product.
 Carry answers and decisions to the section "Принятые решения" with the reason. Do not write the section "Открытые вопросы" and remove it if the document has it: the server adds it when the gate is submitted with open questions. Remove the hints of the template from the document.
 design also has a mockup: call submit_gate_file with mockups.html: a single self-contained page of the screens, light and dark theme, color-scheme declared in each, no network dependencies except fonts.
 A gate that is not needed (only design and arch): submit_gate without content with one question whose skipArea is this area, with why. The experts decide.
@@ -1065,7 +1075,7 @@ func commitMessage(f *specdata.Feature, written, removed []domain.Area, login st
 // session runs the agent and reads what it submitted.
 func (e *Effects) session(ctx context.Context, run workflows.RunRef, f *specdata.Feature, req Request, token string, out *Generated) (map[domain.Area]string, map[domain.Area][]submittedFile, error) {
 	q := e.Store.Q()
-	d := PromptData{Docs: map[domain.Area]string{}, Templates: map[domain.Area]string{}, Questions: map[domain.Area]GateQuestions{}}
+	d := PromptData{Docs: map[domain.Area]string{}, Templates: map[domain.Area]string{}, Questions: map[domain.Area]GateQuestions{}, Lang: e.Lang}
 	var err error
 	for _, a := range domain.Areas {
 		file, err := e.Git.GetFile(ctx, token, f.Branch, git.SpecPath(f.DomainKey, f.SystemKey, f.UniqueID, string(a)))

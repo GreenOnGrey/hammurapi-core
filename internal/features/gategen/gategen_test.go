@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/GreenOnGrey/speclint/contract"
+
 	"github.com/GreenOnGrey/hammurapi-core/internal/cycledata"
 	"github.com/GreenOnGrey/hammurapi-core/internal/domain"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/agent"
@@ -246,5 +248,17 @@ func TestMissingAreas(t *testing.T) {
 func TestFailureTextNoAgent(t *testing.T) {
 	if !strings.Contains(FailureText("ru", ReasonNoAgent), "Служебный агент не назначен") {
 		t.Fatal(FailureText("ru", ReasonNoAgent))
+	}
+}
+
+// CTR-11, ARCH-09: the writer gets the document contract apart from the template, and the rule of the changes of arch.
+func TestPromptContract(t *testing.T) {
+	f := &specdata.Feature{UniqueID: "FTR.FMS.CAR-0005", Title: "T", DomainKey: "FMS", SystemKey: "CAR"}
+	p := Prompt(f, Request{Mode: ModeWrite, Areas: []domain.Area{domain.AreaArch}}, PromptData{Lang: contract.RU,
+		Templates: map[domain.Area]string{domain.AreaArch: "# Архитектура без таблицы решений"}})
+	c := strings.Index(p, "=== document contract for arch ===")
+	tpl := strings.Index(p, "=== rules template for arch ===")
+	if c < 0 || tpl < c || !strings.Contains(p, "«## Принятые решения»") || !strings.Contains(p, "spec_requirements with kind decision") {
+		t.Fatalf("prompt:\n%s", p)
 	}
 }
