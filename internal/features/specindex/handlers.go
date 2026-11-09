@@ -71,6 +71,7 @@ func (s *Service) Routes(r chi.Router) {
 			return nil
 		}))
 		r.Get("/files/{key}/{area}/raw", httpx.Handler(s.raw))
+		s.itemRoute(r) // FTR.HMR.DEV-0003 R8
 		r.Get("/search", httpx.Handler(func(w http.ResponseWriter, r *http.Request) error {
 			q := r.URL.Query()
 			limit, _ := strconv.Atoi(q.Get("limit"))
@@ -86,39 +87,50 @@ func (s *Service) Routes(r chi.Router) {
 	})
 }
 
-// raw serves a file of an area (FTR.HMR.CMN-0005 arch §8): images inline with
-// nosniff and a restrictive CSP; HTML in view mode as a page sandboxed by CSP
-// into an opaque origin (FTR.HMR.SPEC-0001 arch §6), in preview mode as JSON for
-// an iframe srcdoc (kept for one release), otherwise — like every other type —
-// as a download.
+// raw serves a file of an area of the index (FTR.HMR.CMN-0005 arch §8).
 func (s *Service) raw(w http.ResponseWriter, r *http.Request) error {
-	mode := r.URL.Query().Get("mode")
-	preview := mode == "preview" || mode == "view"
 	f, data, err := s.RawFile(r.Context(), chi.URLParam(r, "key"), chi.URLParam(r, "area"), r.URL.Query().Get("name"))
 	if err != nil {
 		return err
 	}
-	if preview && int64(len(data)) > s.cfg.PreviewMaxBytes {
-		return apperr.TooLarge("spec_file_too_large", "the file is too large to open; download it").With("maxBytes", s.cfg.PreviewMaxBytes)
+	return ServeFile(w, f.Name, f.MimeType, data, r.URL.Query().Get("mode"), s.cfg.PreviewMaxBytes, true)
+}
+
+// ServeFile serves a file of an area — of the index or of the branch of a
+// feature (FTR.HMR.DEV-0003 arch §3.2): images inline with nosniff and a
+// restrictive CSP; HTML in view mode as a page sandboxed by CSP into an opaque
+// origin (FTR.HMR.SPEC-0001 arch §6), in preview mode as JSON for an iframe
+// srcdoc (kept for one release), otherwise — like every other type — as a
+// download. A file larger than previewMax is only downloaded. A file that may
+// change at the same address (a branch without the version of its blob in the
+// address) is not cached without revalidation.
+func ServeFile(w http.ResponseWriter, name, mimeType string, data []byte, mode string, previewMax int64, cacheable bool) error {
+	preview := mode == "preview" || mode == "view"
+	if preview && int64(len(data)) > previewMax {
+		return apperr.TooLarge("spec_file_too_large", "the file is too large to open; download it").With("maxBytes", previewMax)
 	}
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Cache-Control", "private, max-age=300")
+	if cacheable {
+		w.Header().Set("Cache-Control", "private, max-age=300")
+	} else {
+		w.Header().Set("Cache-Control", "private, no-cache")
+	}
 	switch {
-	case strings.HasPrefix(f.MimeType, "image/") && previewable(f.MimeType):
-		w.Header().Set("Content-Type", f.MimeType)
+	case strings.HasPrefix(mimeType, "image/") && Previewable(mimeType):
+		w.Header().Set("Content-Type", mimeType)
 		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")
 		_, _ = w.Write(data)
-	case f.MimeType == "text/html" && mode == "view":
+	case mimeType == "text/html" && mode == "view":
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": f.Name}))
+		w.Header().Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": name}))
 		w.Header().Set("Content-Security-Policy", "sandbox allow-scripts")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		_, _ = w.Write(data)
-	case f.MimeType == "text/html" && preview:
+	case mimeType == "text/html" && preview:
 		httpx.JSON(w, http.StatusOK, map[string]string{"html": string(data)})
 	default:
 		w.Header().Set("Content-Type", "application/octet-stream")
-		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": f.Name}))
+		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
 		_, _ = w.Write(data)
 	}
 	return nil

@@ -24,8 +24,11 @@ func (h *Handlers) Routes(r chi.Router) {
 		r.Put("/document", httpx.Handler(h.putDoc))
 		r.Get("/diff", httpx.Handler(h.diff))
 		r.Get("/history", httpx.Handler(h.history))
+		r.Get("/files", httpx.Handler(h.files))       // FTR.HMR.DEV-0003 R1
+		r.Get("/files/raw", httpx.Handler(h.fileRaw)) // R3, R5
 	})
 	r.Get("/features/{uniqueId}/spec/changes", httpx.Handler(h.changes))
+	r.Get("/features/{uniqueId}/spec/links", httpx.Handler(h.links)) // FTR.HMR.DEV-0003 R6
 }
 
 // changes is GET /features/{uniqueId}/spec/changes?area=product|arch

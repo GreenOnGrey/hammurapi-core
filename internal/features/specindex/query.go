@@ -332,7 +332,8 @@ func viewURL(key, area, name string) string {
 		url.Values{"name": {name}, "mode": {"view"}}.Encode()
 }
 
-func previewable(mt string) bool {
+// Previewable tells whether a file of the type opens in the viewer.
+func Previewable(mt string) bool {
 	switch mt {
 	case "image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml", "text/html":
 		return true
@@ -354,7 +355,7 @@ func (s *Service) Files(ctx context.Context, key, area string) ([]File, error) {
 		if err := rows.Scan(&f.Path, &f.Name, &f.Size, &f.MimeType, &f.blobSHA); err != nil {
 			return nil, err
 		}
-		f.Previewable = previewable(f.MimeType) && f.Size <= s.cfg.PreviewMaxBytes
+		f.Previewable = Previewable(f.MimeType) && f.Size <= s.cfg.PreviewMaxBytes
 		if f.Previewable {
 			f.ViewURL = viewURL(key, area, f.Name)
 		}
@@ -374,7 +375,7 @@ func (s *Service) RawFile(ctx context.Context, key, area, name string) (*File, [
 	if err != nil {
 		return nil, nil, err
 	}
-	f.Previewable = previewable(f.MimeType) && f.Size <= s.cfg.PreviewMaxBytes
+	f.Previewable = Previewable(f.MimeType) && f.Size <= s.cfg.PreviewMaxBytes
 	token, err := s.git.BotToken(ctx)
 	if err != nil {
 		return nil, nil, err
