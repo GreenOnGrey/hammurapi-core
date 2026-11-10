@@ -26,6 +26,7 @@ import (
 // Violation is a broken check in the answer 422 spec_contract.
 type Violation struct {
 	Check   string `json:"check"`
+	Subject string `json:"subject,omitempty"` // the key of a service, or the file; the web words the violation by it
 	Message string `json:"message"`
 	Line    int    `json:"line,omitempty"`
 	File    string `json:"file,omitempty"` // a contract file, relative to the folder of the feature: tech/booking.proto
@@ -80,7 +81,7 @@ func (c *Checker) Check(ctx context.Context, token string, f *specdata.Feature, 
 	var out []Violation
 	add := func(file string, fs []contract.Finding) {
 		for _, x := range fs {
-			out = append(out, Violation{Check: x.Check, Message: x.Message, Line: x.Line, File: file, Suggest: x.Suggest})
+			out = append(out, Violation{Check: x.Check, Subject: x.Subject, Message: x.Message, Line: x.Line, File: file, Suggest: x.Suggest})
 		}
 	}
 	if area == domain.AreaArch {
@@ -158,7 +159,7 @@ func CheckFile(rel string, content []byte, services []string) []Violation {
 	fs := contract.CheckContractFile(rel, content, services)
 	out := make([]Violation, 0, len(fs))
 	for _, x := range fs {
-		out = append(out, Violation{Check: x.Check, Message: x.Message, Line: x.Line, File: rel})
+		out = append(out, Violation{Check: x.Check, Subject: x.Subject, Message: x.Message, Line: x.Line, File: rel})
 	}
 	if !hasCheck(fs, contract.CheckContractFileInvalid) && format == contract.FormatOpenAPIYAML {
 		if line, err := checkOpenAPIYAML(content); err != nil {
