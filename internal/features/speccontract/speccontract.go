@@ -149,6 +149,8 @@ func list(ctx context.Context, g git.Provider, token string, f *specdata.Feature
 			out = append(out, contractFile{name: name, path: e.Path, size: e.Size})
 		}
 	}
+	// the violations come in the order of the names, whatever order the provider lists the tree in
+	sort.Slice(out, func(i, j int) bool { return out[i].name < out[j].name })
 	return out, nil
 }
 
