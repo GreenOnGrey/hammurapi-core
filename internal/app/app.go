@@ -341,6 +341,21 @@ func (c *core) toolDeps(s *slices, loadPrincipal agent.PrincipalLoader) agent.To
 		}}
 }
 
+// ciOIDC verifies the OIDC tokens of the CI of the configured provider; the audience is the public address of
+// the API (FTR.HMR.SPEC-0003 arch §3.1).
+func ciOIDC(cfg *config.Config) *cicheck.OIDC {
+	issuers := map[string]string{}
+	switch cfg.GitProvider {
+	case "github":
+		issuers[cfg.GitHubOIDCIssuer] = "github"
+	case "gitlab":
+		if cfg.GitLabOIDCIssuer != "" {
+			issuers[cfg.GitLabOIDCIssuer] = "gitlab"
+		}
+	}
+	return &cicheck.OIDC{Issuers: issuers, Audience: cfg.PublicAPIURL}
+}
+
 // RunAPI runs the HTTP API, SSE, webhooks, the chat agent pool and the internal
 // server (:8081: MCP for the chat, the runner API and the runner MCP).
 func RunAPI(ctx context.Context, cfg *config.Config) error {
@@ -382,6 +397,7 @@ func RunAPI(ctx context.Context, cfg *config.Config) error {
 	releaseSvc := releases.NewService(c.pool, c.store, c.events)
 	serviceSvc := services.NewService(c.pool, sl.catalog)
 	ciSvc := cicheck.NewService(c.pool, c.provider, tokens, branch, cfg.PublicAPIURL) // FTR.HMR.SPEC-0002
+	ciSvc.OIDC = ciOIDC(cfg)                                                          // FTR.HMR.SPEC-0003
 	overviewSvc := overview.NewService(c.pool)
 	trigger := cicd.New(c.provider)
 	deployEffects := &deploy.Effects{Q: c.pool, Trigger: trigger, Secrets: c.secrets, PublicURL: cfg.HooksURL}

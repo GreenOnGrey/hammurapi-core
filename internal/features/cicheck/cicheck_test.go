@@ -61,7 +61,8 @@ func TestLimiter(t *testing.T) {
 
 func TestBearer(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
-	for h, want := range map[string]string{"Bearer hmr_svc_abc": "hmr_svc_abc", "bearer hmr_svc_abc ": "hmr_svc_abc", "Bearer other": "", "Basic hmr_svc_abc": "", "": ""} {
+	for h, want := range map[string]string{"Bearer hmr_ci_abc": "hmr_ci_abc", "bearer hmr_ci_abc ": "hmr_ci_abc", "Bearer a.b.c": "a.b.c",
+		"Bearer hmr_svc_abc": "", "Bearer other": "", "Basic hmr_ci_abc": "", "": ""} {
 		r.Header.Set("Authorization", h)
 		if got := bearer(r); got != want {
 			t.Errorf("%q: %q", h, got)
