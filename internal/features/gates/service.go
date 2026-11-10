@@ -45,6 +45,8 @@ type Service struct {
 	defaultBranch string
 	// Changes keeps the notes in the features a product document changes (FTR.HMR.DEV-0002); nil — none.
 	Changes *specchanges.Service
+	// PreviewMaxBytes is the limit of a file opened in the viewer (FTR.HMR.CMN-0005, FTR.HMR.DEV-0003 R1).
+	PreviewMaxBytes int64
 }
 
 // NewService creates the service.

@@ -268,6 +268,7 @@ func (c *core) slices() *slices {
 	changes := &specchanges.Service{Q: c.pool, Git: c.provider, Lang: contract.Lang(cfg.SpecLanguage)} // FTR.HMR.DEV-0002, FTR.HMR.DEV-0003 R22
 	gs := gates.NewService(c.store, c.provider, c.authSvc, c.events, gategen.Generator{Q: c.pool}, branch)
 	gs.Changes = changes
+	gs.PreviewMaxBytes = cfg.SpecFilePreviewMaxBytes
 	return &slices{
 		spec:      spec,
 		changes:   changes,

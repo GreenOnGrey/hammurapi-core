@@ -171,12 +171,12 @@ func writeFile(ctx context.Context, q postgres.Querier, loc Loc, p, sha string, 
 		VALUES ($1, $2, $3, $4, $5, $6, $7, now())
 		ON CONFLICT (path) DO UPDATE SET blob_sha = EXCLUDED.blob_sha, size_bytes = EXCLUDED.size_bytes,
 			mime_type = EXCLUDED.mime_type, updated_at = now()`,
-		p, loc.Folder, loc.Area, loc.Rest, sha, size, mimeOf(p))
+		p, loc.Folder, loc.Area, loc.Rest, sha, size, MimeOf(p))
 	return err
 }
 
-// mimeOf is the media type by extension; unknown types are downloads.
-func mimeOf(p string) string {
+// MimeOf is the media type by extension; unknown types are downloads.
+func MimeOf(p string) string {
 	ext := strings.ToLower(path.Ext(p))
 	switch ext {
 	case ".md":

@@ -112,3 +112,24 @@ func TestReferencesToDecisions(t *testing.T) {
 		t.Fatalf("got %+v", refs)
 	}
 }
+
+// DRAFT-10, DRAFT-11: the text of a requirement with its note and criteria, of a decision with its notes, of the header.
+func TestItemMarkdown(t *testing.T) {
+	product := "# Бронь\n\n**Версия:** 1.0\n\n---\n\n## Требования\n\n**R1.** Первое.\n*Изменено в `FTR.X.Y-0002` R3: иначе.*\n- Дано а, когда б, тогда в.\n\n**R2.** Второе.\n- Дано г.\n\n## Скоуп\n"
+	if got := ItemMarkdown(product, "R1"); got != "**R1.** Первое.\n*Изменено в `FTR.X.Y-0002` R3: иначе.*\n- Дано а, когда б, тогда в." {
+		t.Fatalf("R1 %q", got)
+	}
+	if got := ItemMarkdown(product, "R2"); got != "**R2.** Второе.\n- Дано г." {
+		t.Fatalf("R2 %q", got)
+	}
+	if got := ItemMarkdown(product, "header"); got != "# Бронь\n\n**Версия:** 1.0" {
+		t.Fatalf("header %q", got)
+	}
+	arch := "# A\n\n## Принятые решения\n\n| A | Решение | Обоснование |\n|---|---|---|\n| A1 | Один | x |\n| A2 | Два | y |\n\n- *A2 — изменено в `FTR.X.Y-0003` A1: так.*\n"
+	if got := ItemMarkdown(arch, "A2"); got != "| A | Решение | Обоснование |\n|---|---|---|\n| A2 | Два | y |\n\n- *A2 — изменено в `FTR.X.Y-0003` A1: так.*" {
+		t.Fatalf("A2 %q", got)
+	}
+	if ItemMarkdown(arch, "A9") != "" || ItemMarkdown(product, "R9") != "" {
+		t.Fatal("a missing item")
+	}
+}
