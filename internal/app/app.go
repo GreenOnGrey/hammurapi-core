@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GreenOnGrey/speclint/contract"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -264,7 +265,7 @@ func (c *core) slices() *slices {
 		AgentReadMaxChars: cfg.SpecAgentReadMaxChars, AgentPageSize: cfg.SpecAgentPageSize})
 	fs := features.NewService(c.store, c.provider, c.authSvc, c.events, branch)
 	mt := metricsources.NewService(c.pool, c.secrets)
-	changes := &specchanges.Service{Q: c.pool, Git: c.provider} // FTR.HMR.DEV-0002
+	changes := &specchanges.Service{Q: c.pool, Git: c.provider, Lang: contract.Lang(cfg.SpecLanguage)} // FTR.HMR.DEV-0002, FTR.HMR.DEV-0003 R22
 	gs := gates.NewService(c.store, c.provider, c.authSvc, c.events, gategen.Generator{Q: c.pool}, branch)
 	gs.Changes = changes
 	return &slices{

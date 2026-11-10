@@ -45,7 +45,7 @@ func (s *Service) Routes(r chi.Router) {
 				return nil
 			}
 			q := r.URL.Query()
-			g, err := s.SpecGraph(r.Context(), GraphQuery{Domain: q.Get("domain"), System: q.Get("system"), Kind: q.Get("kind")})
+			g, err := s.SpecGraph(r.Context(), GraphQuery{Domain: q.Get("domain"), System: q.Get("system"), Kind: q.Get("kind"), Layer: q.Get("layer")})
 			if err != nil {
 				return err
 			}

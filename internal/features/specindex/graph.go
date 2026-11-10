@@ -13,9 +13,11 @@ import (
 // LinkRef is the other end of a link in the header of a document.
 type LinkRef struct {
 	Key          string   `json:"key"`
-	Title        *string  `json:"title"`   // null outside the index
-	Indexed      bool     `json:"indexed"` // the feature has documents in the index (R17)
-	Requirements []string `json:"requirements"`
+	Title        *string  `json:"title"`        // null outside the index
+	Indexed      bool     `json:"indexed"`      // the feature has documents in the index (R17)
+	Layer        string   `json:"layer"`        // product | arch (FTR.HMR.DEV-0003 R15)
+	Items        []string `json:"items"`        // R<n> of product, A<n> of arch
+	Requirements []string `json:"requirements"` // the old name of items, kept for one version of the web
 }
 
 // FeatureLinks are the outgoing and incoming links of a feature (tech §2.2).
@@ -26,16 +28,17 @@ type FeatureLinks struct {
 	ChangedBy  []LinkRef `json:"changedBy"`
 }
 
-// featureLinks reads the links of a feature both ways in one query, ordered by key.
-func (s *Service) featureLinks(ctx context.Context, key string) (*FeatureLinks, error) {
+// featureLinks reads the links of a feature both ways in one query, ordered by
+// key; layer narrows them to product or arch, "" keeps both (FTR.HMR.DEV-0003 R15).
+func (s *Service) featureLinks(ctx context.Context, key, layer string) (*FeatureLinks, error) {
 	out := &FeatureLinks{Extends: []LinkRef{}, Changes: []LinkRef{}, ExtendedBy: []LinkRef{}, ChangedBy: []LinkRef{}}
-	rows, err := s.pool.Query(ctx, `SELECT l.kind, l.source_key = $1, o.key, l.requirements,
+	rows, err := s.pool.Query(ctx, `SELECT l.kind, l.source_key = $1, o.key, l.requirements, l.layer,
 			EXISTS (SELECT 1 FROM spec_documents sd WHERE sd.feature_key = o.key), f.title
 		FROM spec_links l
 		CROSS JOIN LATERAL (SELECT CASE WHEN l.source_key = $1 THEN l.target_key ELSE l.source_key END AS key) o
 		LEFT JOIN features f ON f.unique_id = o.key
-		WHERE l.source_key = $1 OR l.target_key = $1
-		ORDER BY o.key`, key)
+		WHERE (l.source_key = $1 OR l.target_key = $1) AND ($2 = '' OR l.layer = $2)
+		ORDER BY o.key, l.layer DESC`, key, layer)
 	if err != nil {
 		return nil, err
 	}
@@ -44,7 +47,7 @@ func (s *Service) featureLinks(ctx context.Context, key string) (*FeatureLinks, 
 		var kind string
 		var outgoing bool
 		var r LinkRef
-		if err := rows.Scan(&kind, &outgoing, &r.Key, &r.Requirements, &r.Indexed, &r.Title); err != nil {
+		if err := rows.Scan(&kind, &outgoing, &r.Key, &r.Requirements, &r.Layer, &r.Indexed, &r.Title); err != nil {
 			return nil, err
 		}
 		if !r.Indexed {
@@ -53,6 +56,7 @@ func (s *Service) featureLinks(ctx context.Context, key string) (*FeatureLinks, 
 		if r.Requirements == nil {
 			r.Requirements = []string{}
 		}
+		r.Items = r.Requirements
 		switch {
 		case kind == LinkExtends && outgoing:
 			out.Extends = append(out.Extends, r)
@@ -83,7 +87,9 @@ type GraphEdge struct {
 	Source       string   `json:"source"`
 	Target       string   `json:"target"`
 	Kind         string   `json:"kind"`
-	Requirements []string `json:"requirements"`
+	Layer        string   `json:"layer"` // product | arch (FTR.HMR.DEV-0003 R15)
+	Items        []string `json:"items"`
+	Requirements []string `json:"requirements"` // the old name of items, kept for one version of the web
 }
 
 // Graph is GET /api/v1/spec/graph.
@@ -94,9 +100,10 @@ type Graph struct {
 }
 
 // GraphQuery narrows the graph: domain and system keep the edges with an end
-// inside and mark the other end as context; kind keeps one kind of edges.
+// inside and mark the other end as context; kind keeps one kind of edges;
+// layer is product (the default), arch or both (FTR.HMR.DEV-0003 R15).
 type GraphQuery struct {
-	Domain, System, Kind string
+	Domain, System, Kind, Layer string
 }
 
 // KeyParts are the domain and the system of a feature key.
@@ -116,6 +123,16 @@ func (s *Service) SpecGraph(ctx context.Context, q GraphQuery) (*Graph, error) {
 	if q.Kind != "" && q.Kind != LinkExtends && q.Kind != LinkChanges {
 		return nil, apperr.BadRequest("bad_kind", "kind is extends, changes or empty")
 	}
+	layer := q.Layer
+	switch layer {
+	case "":
+		layer = LayerProduct
+	case "both":
+		layer = ""
+	case LayerProduct, LayerArch:
+	default:
+		return nil, apperr.BadRequest("bad_layer", "layer is product, arch or both")
+	}
 	nodes := map[string]*GraphNode{}
 	rows, err := s.pool.Query(ctx, `SELECT DISTINCT sd.feature_key, f.title, sd.domain, sd.system, f.phase::text
 		FROM spec_documents sd LEFT JOIN features f ON f.unique_id = sd.feature_key`)
@@ -134,10 +151,10 @@ func (s *Service) SpecGraph(ctx context.Context, q GraphQuery) (*Graph, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	rows, err = s.pool.Query(ctx, `SELECT l.source_key, l.target_key, l.kind, l.requirements, f.phase::text
+	rows, err = s.pool.Query(ctx, `SELECT l.source_key, l.target_key, l.kind, l.layer, l.requirements, f.phase::text
 		FROM spec_links l LEFT JOIN features f ON f.unique_id = l.target_key
-		WHERE $1 = '' OR l.kind = $1
-		ORDER BY l.source_key, l.target_key, l.kind`, q.Kind)
+		WHERE ($1 = '' OR l.kind = $1) AND ($2 = '' OR l.layer = $2)
+		ORDER BY l.source_key, l.target_key, l.kind, l.layer DESC`, q.Kind, layer)
 	if err != nil {
 		return nil, err
 	}
@@ -145,13 +162,14 @@ func (s *Service) SpecGraph(ctx context.Context, q GraphQuery) (*Graph, error) {
 	for rows.Next() {
 		var e GraphEdge
 		var phase *string
-		if err := rows.Scan(&e.Source, &e.Target, &e.Kind, &e.Requirements, &phase); err != nil {
+		if err := rows.Scan(&e.Source, &e.Target, &e.Kind, &e.Layer, &e.Requirements, &phase); err != nil {
 			rows.Close()
 			return nil, err
 		}
 		if e.Requirements == nil {
 			e.Requirements = []string{}
 		}
+		e.Items = e.Requirements
 		if _, ok := nodes[e.Target]; !ok { // R17: a key outside the index
 			d, sy := KeyParts(e.Target)
 			nodes[e.Target] = &GraphNode{Key: e.Target, Domain: d, System: sy, Phase: phase}

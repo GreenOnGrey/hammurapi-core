@@ -222,16 +222,19 @@ func TestSpecLinks(t *testing.T) {
 		t.Fatalf("graph with If-None-Match %d", w.Code)
 	}
 
-	// LINK-06: the backfill fills an empty table with the same links, and once only.
+	// LINK-06, FTR.HMR.DEV-0003 tech §4.2: an index of another version of the contract is read again
+	// with the same links, and once only.
 	_, err = db.Exec(ctx, `DELETE FROM spec_links`)
 	must(t, err)
-	n, err := svc.BackfillLinks(ctx)
+	_, err = db.Exec(ctx, `DELETE FROM spec_index_state`)
 	must(t, err)
-	if got := links(); n != 4 || !reflect.DeepEqual(got, want) {
-		t.Fatalf("backfill %d %q", n, got)
+	n, err := svc.ReindexContract(ctx)
+	must(t, err)
+	if got := links(); n < 4 || !reflect.DeepEqual(got, want) {
+		t.Fatalf("reindex %d %q", n, got)
 	}
-	if n, err := svc.BackfillLinks(ctx); err != nil || n != 0 {
-		t.Fatalf("second backfill %d %v", n, err)
+	if n, err := svc.ReindexContract(ctx); err != nil || n != 0 {
+		t.Fatalf("second reindex %d %v", n, err)
 	}
 
 	// LINK-05: a key removed from «Опирается на» leaves the index with the next indexing.

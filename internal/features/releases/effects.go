@@ -201,17 +201,25 @@ func (e *Effects) alignNotes(ctx context.Context, token string, f *specdata.Feat
 		}
 		metrics.SpecChangeNotes.WithLabelValues("conflict_reapplied").Inc()
 	}
-	product, err := e.Git.GetFile(ctx, token, f.Branch, git.SpecPath(f.DomainKey, f.SystemKey, f.UniqueID, "product"))
-	if errors.Is(err, git.ErrNotFound) {
+	// rows that turned wrong since the submission (a target left the index) get no note: the merge goes on;
+	// product and arch in one commit (FTR.HMR.DEV-0003 arch §3.7)
+	var changes []git.FileChange
+	for _, area := range specchanges.Areas {
+		doc, err := e.Git.GetFile(ctx, token, f.Branch, git.SpecPath(f.DomainKey, f.SystemKey, f.UniqueID, area))
+		if errors.Is(err, git.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		c, _, err := e.Changes.Align(ctx, token, f, area, string(doc.Content))
+		if err != nil {
+			return "", err
+		}
+		changes = append(changes, c...)
+	}
+	if len(changes) == 0 {
 		return "", nil
-	}
-	if err != nil {
-		return "", err
-	}
-	// rows that turned wrong since the submission (a target left the index) get no note: the merge goes on
-	changes, _, err := e.Changes.Align(ctx, token, f, string(product.Content))
-	if err != nil || len(changes) == 0 {
-		return "", err
 	}
 	if _, err = e.Git.Commit(ctx, token, f.Branch, specchanges.CommitMessage(f.UniqueID), changes); err != nil {
 		return "", err

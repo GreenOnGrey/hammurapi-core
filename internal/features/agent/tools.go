@@ -13,8 +13,10 @@ import (
 	"github.com/GreenOnGrey/hammurapi-core/internal/domain"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/features"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/gates"
+	"github.com/GreenOnGrey/hammurapi-core/internal/features/specchanges"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/git"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/httpx"
+	"github.com/GreenOnGrey/hammurapi-core/internal/platform/markdown"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/mcp"
 	"github.com/GreenOnGrey/hammurapi-core/internal/specdata"
 )
@@ -62,7 +64,7 @@ const DiscoveryRule = "\n--- How Discovery is revised ---\n" +
 type ToolDeps struct {
 	// CheckChanges checks the section «Изменения в других решениях» of a product
 	// document the writer submits (FTR.HMR.DEV-0002 R3): the reasons of the wrong rows, "" — none.
-	CheckChanges  func(ctx context.Context, featureKey, product string) (string, error)
+	CheckChanges  func(ctx context.Context, featureKey, area, doc string) (string, error)
 	Store         specdata.Store
 	Git           git.Provider
 	Tokens        git.TokenSource
@@ -675,13 +677,18 @@ func Tools(d ToolDeps) []mcp.Tool {
 				if msg := CheckSubmission(g.Writer, raw); msg != "" {
 					return "", &mcp.ToolError{Msg: msg}
 				}
-				if d.CheckChanges != nil {
-					var in struct {
-						Area    domain.Area `json:"area"`
-						Content string      `json:"content"`
+				var in struct {
+					Area    domain.Area `json:"area"`
+					Content string      `json:"content"`
+				}
+				if json.Unmarshal(raw, &in) == nil && in.Content != "" {
+					if in.Area == domain.AreaArch {
+						if msg := ArchViolations(in.Content); msg != "" { // FTR.HMR.DEV-0003 R21
+							return "", &mcp.ToolError{Msg: msg}
+						}
 					}
-					if json.Unmarshal(raw, &in) == nil && in.Area == domain.AreaProduct && in.Content != "" {
-						msg, err := d.CheckChanges(ctx, g.Feature, in.Content)
+					if d.CheckChanges != nil && specchanges.Supported(string(in.Area)) {
+						msg, err := d.CheckChanges(ctx, g.Feature, string(in.Area), in.Content)
 						if err != nil {
 							return "", err
 						}
@@ -780,4 +787,16 @@ func truncate(s string, n int) string {
 		return string(r[:n]) + "…"
 	}
 	return s
+}
+
+// ArchViolations is the reason an arch document of the writer is refused: a
+// decision without a number A<n> breaks the document contract (FTR.HMR.DEV-0003
+// R16, R21); "" — none.
+func ArchViolations(doc string) string {
+	bad := markdown.UnnumberedDecisions(doc)
+	if len(bad) == 0 {
+		return ""
+	}
+	return "decisions without a number A<n> in the table of decisions («Принятые решения» / «Decisions»): " + strings.Join(bad, "; ") +
+		". Number every decision A1, A2, … in the first column (a number is never reused) and submit again."
 }

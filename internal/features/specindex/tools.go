@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/GreenOnGrey/speclint/contract"
+
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/markdown"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/mcp"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/postgres"
@@ -129,19 +131,31 @@ func (s *Service) Tools() []mcp.Tool {
 		{
 			Name: "spec_requirements",
 			Description: "Requirements of a feature from its product specification: id (R1…), text, acceptance criteria (Given…/Дано…) and section. " +
-				"ids narrows them, e.g. [\"R3\"].",
+				"kind decision gives the architecture decisions A1… of its arch specification instead (FTR.HMR.DEV-0003), all — both. " +
+				"ids narrows them, e.g. [\"R3\"] or [\"A5\"].",
 			Modes: allModes, ReadOnly: true,
 			InputSchema: schema(map[string]any{"featureKey": str("FTR.<DOMAIN>.<SYSTEM>-NNNN"),
-				"ids": map[string]any{"type": "array", "items": map[string]any{"type": "string"}}}, "featureKey"),
+				"ids":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+				"kind": map[string]any{"type": "string", "enum": []string{"requirement", "decision", "all"}, "description": "requirement by default"}}, "featureKey"),
 			Handler: func(ctx context.Context, _ mcp.Grant, raw json.RawMessage) (string, error) {
 				var a struct {
 					FeatureKey string   `json:"featureKey"`
 					IDs        []string `json:"ids"`
+					Kind       string   `json:"kind"`
 				}
 				if err := json.Unmarshal(raw, &a); err != nil || a.FeatureKey == "" {
 					return "", &mcp.ToolError{Msg: "featureKey is required"}
 				}
-				reqs, err := s.FeatureRequirements(ctx, a.FeatureKey, a.IDs)
+				switch a.Kind {
+				case "":
+					a.Kind = "requirement"
+				case "requirement", "decision":
+				case "all":
+					a.Kind = ""
+				default:
+					return "", &mcp.ToolError{Msg: "kind is requirement, decision or all"}
+				}
+				reqs, err := s.FeatureRequirements(ctx, a.FeatureKey, a.IDs, a.Kind)
 				if err != nil {
 					return "", err
 				}
@@ -172,34 +186,43 @@ func (s *Service) Tools() []mcp.Tool {
 		},
 		{
 			Name: "spec_links",
-			Description: "Declared links between features of the default branch (FTR.HMR.DEV-0002): what a feature builds on (its header «Опирается на»), " +
-				"which requirements of other features it changes (its section «Изменения в других решениях»), and the same the other way round. " +
-				"With featureKey — the four lists of that feature: extends, changes, extendedBy, changedBy, each item with key, title, requirements " +
+			Description: "Declared links between features of the default branch (FTR.HMR.DEV-0002, FTR.HMR.DEV-0003): what a feature builds on (the header «Опирается на» of its product or arch), " +
+				"which requirements R<n> or architecture decisions A<n> of other features it changes (the section «Изменения в других решениях» of product or arch), and the same the other way round. " +
+				"Every link has a layer: product or arch. " +
+				"With featureKey — the four lists of that feature: extends, changes, extendedBy, changedBy, each item with key, title, layer, items " +
 				"and indexed (false: the key is not in the default branch). Without featureKey — the graph: features and edges, narrowed by domain, " +
-				"system and kind; a graph larger than the limit of spec_read asks to narrow it. Unlike spec_references, which finds every mention, these are dependencies.",
+				"system, kind and layer; a graph larger than the limit of spec_read asks to narrow it. Unlike spec_references, which finds every mention, these are dependencies.",
 			Modes: allModes, ReadOnly: true,
 			InputSchema: schema(map[string]any{"featureKey": str("FTR.<DOMAIN>.<SYSTEM>-NNNN; omit for the graph"),
 				"domain": str("Domain key, for the graph"), "system": str("System key, for the graph"),
-				"kind": map[string]any{"type": "string", "enum": []string{LinkExtends, LinkChanges}, "description": "Only links of this kind"}}),
+				"kind":  map[string]any{"type": "string", "enum": []string{LinkExtends, LinkChanges}, "description": "Only links of this kind"},
+				"layer": map[string]any{"type": "string", "enum": []string{LayerProduct, LayerArch, "both"}, "description": "Only links of this layer; both by default"}}),
 			Handler: func(ctx context.Context, _ mcp.Grant, raw json.RawMessage) (string, error) {
-				var a struct{ FeatureKey, Domain, System, Kind string }
+				var a struct{ FeatureKey, Domain, System, Kind, Layer string }
 				if err := json.Unmarshal(raw, &a); err != nil {
 					return "", &mcp.ToolError{Msg: "bad arguments"}
 				}
 				if a.Kind != "" && a.Kind != LinkExtends && a.Kind != LinkChanges {
 					return "", &mcp.ToolError{Msg: "kind is extends or changes"}
 				}
+				switch a.Layer {
+				case "":
+					a.Layer = "both"
+				case LayerProduct, LayerArch, "both":
+				default:
+					return "", &mcp.ToolError{Msg: "layer is product, arch or both"}
+				}
 				if a.FeatureKey != "" {
 					if a.Domain != "" || a.System != "" {
-						return "", &mcp.ToolError{Msg: "domain and system narrow the graph; with featureKey only kind applies"}
+						return "", &mcp.ToolError{Msg: "domain and system narrow the graph; with featureKey only kind and layer apply"}
 					}
-					out, err := s.LinksOf(ctx, strings.ToUpper(strings.TrimSpace(a.FeatureKey)), a.Kind)
+					out, err := s.LinksOf(ctx, strings.ToUpper(strings.TrimSpace(a.FeatureKey)), a.Kind, a.Layer)
 					if err != nil {
 						return "", err
 					}
 					return asJSON(out)
 				}
-				g, err := s.SpecGraph(ctx, GraphQuery{Domain: strings.ToUpper(a.Domain), System: strings.ToUpper(a.System), Kind: a.Kind})
+				g, err := s.SpecGraph(ctx, GraphQuery{Domain: strings.ToUpper(a.Domain), System: strings.ToUpper(a.System), Kind: a.Kind, Layer: a.Layer})
 				if err != nil {
 					return "", err
 				}
@@ -231,16 +254,20 @@ type LinksResult struct {
 	FeatureLinks
 }
 
-// LinksOf returns the links of a feature for the agent (FTR.HMR.DEV-0002 R18); kind keeps one kind.
+// LinksOf returns the links of a feature for the agent (FTR.HMR.DEV-0002 R18); kind keeps one kind,
+// layer one layer (product, arch; both or "" — all, FTR.HMR.DEV-0003 R15).
 // A key outside the index with links to it is answered: the agent learns who refers to it (R17).
-func (s *Service) LinksOf(ctx context.Context, key, kind string) (*LinksResult, error) {
+func (s *Service) LinksOf(ctx context.Context, key, kind, layer string) (*LinksResult, error) {
 	if m := targetRe.FindStringSubmatch(key); m == nil || m[2] != "" {
 		return nil, &mcp.ToolError{Msg: "featureKey is FTR.<DOMAIN>.<SYSTEM>-NNNN"}
 	}
 	if kind != "" && kind != LinkExtends && kind != LinkChanges {
 		return nil, &mcp.ToolError{Msg: "kind is extends or changes"}
 	}
-	l, err := s.featureLinks(ctx, key)
+	if layer == "both" {
+		layer = ""
+	}
+	l, err := s.featureLinks(ctx, key, layer)
 	if err != nil {
 		return nil, err
 	}
@@ -406,11 +433,15 @@ func (s *Service) notFound(ctx context.Context, key, area string) error {
 	return &mcp.ToolError{Msg: msg}
 }
 
-// FeatureRequirements lists the requirements of a feature (AGT-04).
-func (s *Service) FeatureRequirements(ctx context.Context, key string, ids []string) ([]Requirement, error) {
+// FeatureRequirements lists the requirements of a feature (AGT-04); kind
+// narrows them to requirements or decisions A<n> (FTR.HMR.DEV-0003 R10), "" — both.
+func (s *Service) FeatureRequirements(ctx context.Context, key string, ids []string, kind string) ([]Requirement, error) {
+	if ids == nil {
+		ids = []string{} // a nil slice is NULL in SQL: cardinality(NULL) = 0 is not true
+	}
 	rows, err := s.pool.Query(ctx, `SELECT req_id, text, criteria, COALESCE(section, '') FROM spec_requirements
-		WHERE feature_key = $1 AND (cardinality($2::text[]) = 0 OR req_id = ANY($2))
-		ORDER BY substring(req_id from '\d+')::int, req_id`, key, ids)
+		WHERE feature_key = $1 AND (cardinality($2::text[]) = 0 OR req_id = ANY($2)) AND ($3 = '' OR kind = $3)
+		ORDER BY kind DESC, substring(req_id from '\d+')::int, req_id`, key, ids, kind)
 	if err != nil {
 		return nil, err
 	}
@@ -429,22 +460,26 @@ func (s *Service) FeatureRequirements(ctx context.Context, key string, ids []str
 		return nil, err
 	}
 	if len(out) == 0 {
+		area := "product" // the document the items of the kind come from
+		if kind == "decision" {
+			area = "arch"
+		}
 		var n int
-		_ = s.pool.QueryRow(ctx, `SELECT count(*) FROM spec_documents WHERE feature_key = $1 AND area = 'product'`, key).Scan(&n)
+		_ = s.pool.QueryRow(ctx, `SELECT count(*) FROM spec_documents WHERE feature_key = $1 AND ($2 = '' OR area = $2)`, key, map[bool]string{true: "", false: area}[kind == ""]).Scan(&n)
 		if n == 0 {
-			return nil, s.notFound(ctx, key, "product")
+			return nil, s.notFound(ctx, key, area)
 		}
 	}
 	return out, nil
 }
 
-var targetRe = regexp.MustCompile(`^(FTR\.[A-Z][A-Z0-9]{1,9}\.[A-Z][A-Z0-9]{1,9}-\d{4})(?:-(` + markdown.ReqID + `))?$`)
+var targetRe = regexp.MustCompile(`^(FTR\.[A-Z][A-Z0-9]{1,9}\.[A-Z][A-Z0-9]{1,9}-\d{4})(?:-(` + markdown.ReqID + `|` + contract.DecisionID + `))?$`)
 
 // References lists mentions of a feature or a requirement (AGT-05, AGT-06).
 func (s *Service) References(ctx context.Context, target string, page int) (map[string]any, error) {
 	m := targetRe.FindStringSubmatch(strings.TrimSpace(target))
 	if m == nil {
-		return nil, &mcp.ToolError{Msg: "target is a feature key FTR.<DOMAIN>.<SYSTEM>-NNNN or a requirement key FTR.…-NNNN-R<n>"}
+		return nil, &mcp.ToolError{Msg: "target is a feature key FTR.<DOMAIN>.<SYSTEM>-NNNN, a requirement key FTR.…-NNNN-R<n> or a decision key FTR.…-NNNN-A<n>"}
 	}
 	size := s.cfg.AgentPageSize
 	rows, err := s.pool.Query(ctx, `SELECT source_key, area, COALESCE(section, ''), COALESCE(target_req, ''), snippet, count(*) OVER ()

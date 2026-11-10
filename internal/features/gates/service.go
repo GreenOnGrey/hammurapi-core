@@ -231,9 +231,9 @@ func (s *Service) SaveDocument(ctx context.Context, p *domain.Principal, uniqueI
 	}
 	changes := []git.FileChange{{Path: path, Content: []byte(in.Content)}}
 	var notes []git.FileChange
-	if area == domain.AreaProduct && s.Changes != nil {
-		// FTR.HMR.DEV-0002 R3, R4: the notes go in the same commit; a wrong row does not stop the save
-		if notes, _, err = s.Changes.Align(ctx, token, f, in.Content); err != nil {
+	if specchanges.Supported(string(area)) && s.Changes != nil {
+		// FTR.HMR.DEV-0002 R3, R4, FTR.HMR.DEV-0003 R14: the notes go in the same commit; a wrong row does not stop the save
+		if notes, _, err = s.Changes.Align(ctx, token, f, string(area), in.Content); err != nil {
 			return nil, auth.MapGitError(err)
 		}
 		changes = append(changes, notes...)
@@ -361,8 +361,9 @@ func RecordTransition(area domain.Area, to string) {
 }
 
 // SpecChanges lists the rows of the section «Изменения в других решениях» of the
-// product document with their state in the branch (FTR.HMR.DEV-0002 R7).
-func (s *Service) SpecChanges(ctx context.Context, p *domain.Principal, uniqueID string) ([]specchanges.Item, error) {
+// product or arch document with their state in the branch (FTR.HMR.DEV-0002 R7,
+// FTR.HMR.DEV-0003 R16).
+func (s *Service) SpecChanges(ctx context.Context, p *domain.Principal, uniqueID string, area domain.Area) ([]specchanges.Item, error) {
 	f, err := features.Load(ctx, s.store, uniqueID)
 	if err != nil {
 		return nil, err
@@ -375,7 +376,10 @@ func (s *Service) SpecChanges(ctx context.Context, p *domain.Principal, uniqueID
 	if s.Changes == nil {
 		return items, nil
 	}
-	file, err := s.git.GetFile(ctx, token, s.readRef(f), specPath(f, domain.AreaProduct))
+	if !specchanges.Supported(string(area)) {
+		return items, nil
+	}
+	file, err := s.git.GetFile(ctx, token, s.readRef(f), specPath(f, area))
 	if errors.Is(err, git.ErrNotFound) {
 		return items, nil
 	}
@@ -384,7 +388,7 @@ func (s *Service) SpecChanges(ctx context.Context, p *domain.Principal, uniqueID
 	}
 	ref := *f
 	ref.Branch = s.readRef(f)
-	got, err := s.Changes.Items(ctx, token, &ref, string(file.Content))
+	got, err := s.Changes.Items(ctx, token, &ref, string(area), string(file.Content))
 	if err != nil {
 		return nil, auth.MapGitError(err)
 	}

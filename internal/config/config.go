@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/GreenOnGrey/speclint/contract"
 )
 
 // Config holds every deployment-level parameter of a Hammurapi instance.
@@ -103,6 +105,10 @@ type Config struct {
 	OTLPEndpoint    string
 	LogLevel        string
 	DefaultLanguage string
+	// SpecLanguage is the language of the documents: the headings of the document contract, the notes and
+	// the instructions of the writer are written in it (FTR.HMR.DEV-0003 R23). Unset — DefaultLanguage
+	// when it is ru or en, otherwise en.
+	SpecLanguage string
 
 	ImportMaxBytes             int64
 	ImportMaxUncompressedBytes int64
@@ -199,6 +205,7 @@ func Load() (*Config, error) {
 		LogLevel:                env("LOG_LEVEL", "info"),
 		DefaultLanguage:         env("DEFAULT_LANGUAGE", "en"),
 	}
+	c.SpecLanguage = string(contract.ParseLang(env("SPEC_LANGUAGE", c.DefaultLanguage)))
 	var err error
 	if c.CodeTimeout, err = envDuration(renamed("CODE_TIMEOUT", "RUNNER_TIMEOUT"), 2*time.Hour); err != nil {
 		return nil, err

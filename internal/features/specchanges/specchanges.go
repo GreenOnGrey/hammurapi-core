@@ -1,6 +1,7 @@
-// Package specchanges keeps the notes «Изменено в …» in the product documents of
-// the features a feature changes (FTR.HMR.DEV-0002): one function for every
-// path that saves a product document.
+// Package specchanges keeps the notes «Изменено в …» in the documents of the
+// features a feature changes (FTR.HMR.DEV-0002): requirements R<n> of product
+// and decisions A<n> of arch (FTR.HMR.DEV-0003 R12, R14); one function for every
+// path that saves a product or arch document.
 package specchanges
 
 import (
@@ -9,10 +10,11 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/GreenOnGrey/speclint/contract"
+
 	"github.com/GreenOnGrey/hammurapi-core/internal/apperr"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/specindex"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/git"
-	"github.com/GreenOnGrey/hammurapi-core/internal/platform/markdown"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/metrics"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/postgres"
 	"github.com/GreenOnGrey/hammurapi-core/internal/specdata"
@@ -23,6 +25,8 @@ const (
 	ReasonUnknownTarget      = "unknown_target"
 	ReasonTargetInWork       = "target_in_work"
 	ReasonUnknownRequirement = "unknown_requirement"
+	ReasonUnknownDecision    = "unknown_decision" // FTR.HMR.DEV-0003 R12
+	ReasonWrongKind          = "wrong_kind"       // R<n> in arch, A<n> in product
 )
 
 // RowError is a row of the section that gets no note.
@@ -43,9 +47,23 @@ func (e RowError) Message() string {
 		return e.Feature + " is still in work: changes to it go through a revision request in its own topic, not this section."
 	case ReasonUnknownRequirement:
 		return where + ": no such requirement in the default branch."
+	case ReasonUnknownDecision:
+		return where + ": no such architecture decision in the default branch."
+	case ReasonWrongKind:
+		return where + ": product changes requirements R<n>, arch changes decisions A<n> — move the row to the section of the other document."
 	}
 	return e.Feature + ": no such feature in the default branch."
 }
+
+// Areas are the areas whose documents have the section of changes and get
+// notes (FTR.HMR.DEV-0003 R12): product with R<n>, arch with A<n>.
+var Areas = []string{"product", "arch"}
+
+// Supported tells whether a document of the area has the section of changes.
+func Supported(area string) bool { return area == Areas[0] || area == Areas[1] }
+
+// lang is the language the notes are written in: English when unset (FTR.HMR.DEV-0003 R23).
+func (s *Service) lang() contract.Lang { return contract.ParseLang(string(s.Lang)) }
 
 // Messages joins the reasons for a ToolError of submit_gate.
 func Messages(errs []RowError) string {
@@ -58,65 +76,72 @@ func Messages(errs []RowError) string {
 
 // Service checks the rows against the index of the default branch and writes the notes.
 type Service struct {
-	Q   postgres.Querier
-	Git git.Provider
+	Q    postgres.Querier
+	Git  git.Provider
+	Lang contract.Lang // the language of the documents: the notes are written in it (FTR.HMR.DEV-0003 R22)
 }
 
 // row is a row of the section with what Align needs.
 type row struct {
-	markdown.Change
-	path string // product of the target in the default branch; "" when the row is wrong
-	err  *RowError
+	Feature, Req, Note string
+	path               string // the document of the target in the default branch; "" when the row is wrong
+	err                *RowError
 }
 
-// check validates the rows of a product document (R3): the target is in the
-// index of the default branch and has the requirement.
-func (s *Service) check(ctx context.Context, self, product string) ([]row, []RowError, error) {
-	changes := markdown.ParseChanges(product)
+// check validates the rows of a product or arch document (R3, FTR.HMR.DEV-0003
+// R12): the target has the document of the same area in the index of the
+// default branch, and the item of the kind of the area.
+func (s *Service) check(ctx context.Context, self, area, doc string) ([]row, []RowError, error) {
+	kind := contract.KindOf(contract.Area(area))
 	paths := map[string]string{}
-	reqs := map[string]map[string]bool{}
+	items := map[string]map[string]bool{}
 	var rows []row
 	var errs []RowError
-	for _, c := range changes {
-		r := row{Change: c}
-		path, ok := paths[c.Feature]
+	for _, c := range contract.Parse(doc, contract.Area(area)).Changes {
+		r := row{Feature: c.Key, Req: c.Item, Note: c.Text}
+		path, ok := paths[c.Key]
 		if !ok {
-			err := s.Q.QueryRow(ctx, `SELECT path FROM spec_documents WHERE feature_key = $1 AND area = 'product'`, c.Feature).Scan(&path)
+			err := s.Q.QueryRow(ctx, `SELECT path FROM spec_documents WHERE feature_key = $1 AND area = $2`, c.Key, area).Scan(&path)
 			if err != nil && !postgres.IsNoRows(err) {
 				return nil, nil, err
 			}
-			paths[c.Feature] = path
+			paths[c.Key] = path
 		}
 		reason := ""
 		switch {
-		case c.Feature == self:
+		case c.Key == self:
 			reason = ReasonUnknownTarget
 		case path == "":
 			var known bool
-			if err := s.Q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM features WHERE unique_id = $1 AND deleted_at IS NULL)`, c.Feature).Scan(&known); err != nil {
+			if err := s.Q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM features WHERE unique_id = $1 AND deleted_at IS NULL)`, c.Key).Scan(&known); err != nil {
 				return nil, nil, err
 			}
 			reason = ReasonUnknownTarget
 			if known {
 				reason = ReasonTargetInWork
 			}
-		case c.Req != "":
-			ids, ok := reqs[c.Feature]
+		case c.Item != "" && contract.ItemKind(c.Item) != "" && contract.ItemKind(c.Item) != kind:
+			reason = ReasonWrongKind
+		case c.Item != "":
+			ids, ok := items[c.Key]
 			if !ok {
 				var err error
-				if ids, err = s.requirements(ctx, c.Feature); err != nil {
+				if ids, err = s.items(ctx, c.Key, kind); err != nil {
 					return nil, nil, err
 				}
-				reqs[c.Feature] = ids
+				items[c.Key] = ids
 			}
-			if !ids[c.Req] {
+			if !ids[c.Item] {
 				reason = ReasonUnknownRequirement
+				if kind == contract.KindDecision {
+					reason = ReasonUnknownDecision
+				}
 			}
 		}
 		if reason != "" {
-			e := RowError{Feature: c.Feature, Reason: reason}
-			if c.Req != "" {
-				req := c.Req
+			e := RowError{Feature: c.Key, Reason: reason}
+			if c.Item != "" {
+				req := c.Item
 				e.Requirement = &req
 			}
 			r.err = &e
@@ -129,16 +154,19 @@ func (s *Service) check(ctx context.Context, self, product string) ([]row, []Row
 	return rows, errs, nil
 }
 
-// Check lists the rows of a product document that cannot be applied (R3).
-func (s *Service) Check(ctx context.Context, self, product string) ([]RowError, error) {
-	_, errs, err := s.check(ctx, self, product)
+// Check lists the rows of a product or arch document that cannot be applied (R3).
+func (s *Service) Check(ctx context.Context, self, area, doc string) ([]RowError, error) {
+	if !Supported(area) {
+		return nil, nil
+	}
+	_, errs, err := s.check(ctx, self, area, doc)
 	return errs, err
 }
 
 // Refusal is the reason a submission of the writer is refused with, "" — none
 // (tech §3.1); a refusal is counted.
-func (s *Service) Refusal(ctx context.Context, self, product string) (string, error) {
-	errs, err := s.Check(ctx, self, product)
+func (s *Service) Refusal(ctx context.Context, self, area, doc string) (string, error) {
+	errs, err := s.Check(ctx, self, area, doc)
 	if err != nil || len(errs) == 0 {
 		return "", err
 	}
@@ -151,8 +179,8 @@ func Applied(changes []git.FileChange) {
 	metrics.SpecChangeNotes.WithLabelValues("applied").Add(float64(len(changes)))
 }
 
-func (s *Service) requirements(ctx context.Context, key string) (map[string]bool, error) {
-	rs, err := s.Q.Query(ctx, `SELECT req_id FROM spec_requirements WHERE feature_key = $1`, key)
+func (s *Service) items(ctx context.Context, key, kind string) (map[string]bool, error) {
+	rs, err := s.Q.Query(ctx, `SELECT req_id FROM spec_requirements WHERE feature_key = $1 AND kind = $2`, key, kind)
 	if err != nil {
 		return nil, err
 	}
@@ -168,27 +196,16 @@ func (s *Service) requirements(ctx context.Context, key string) (map[string]bool
 	return out, rs.Err()
 }
 
-// sourceReq is the first requirement of the source that names the target
-// (tech §4.2); "" when none does.
-func sourceReq(reqs []specindex.Requirement, target string) string {
-	for _, r := range reqs {
-		if strings.Contains(r.Text, target) {
-			return r.ID
-		}
-	}
-	return ""
-}
-
 // target is a document to align: the default-branch path and the notes it should have.
 type target struct {
 	path  string
-	notes []markdown.Note
+	notes []contract.Note
 }
 
 // plan groups the valid rows by target and adds the targets where the branch
 // already has notes of the source (a removed row, R4).
-func (s *Service) plan(ctx context.Context, token string, f *specdata.Feature, product string, rows []row) ([]string, map[string]*target, error) {
-	reqs := specindex.Requirements(product)
+func (s *Service) plan(ctx context.Context, token string, f *specdata.Feature, area, doc string, rows []row) ([]string, map[string]*target, error) {
+	src := contract.Parse(doc, contract.Area(area))
 	byKey := map[string]*target{}
 	var order []string
 	add := func(key, path string) *target {
@@ -205,16 +222,16 @@ func (s *Service) plan(ctx context.Context, token string, f *specdata.Feature, p
 			continue
 		}
 		t := add(r.Feature, r.path)
-		t.notes = append(t.notes, markdown.Note{Req: r.Req, SourceReq: sourceReq(reqs, r.Feature), Text: r.Note})
+		t.notes = append(t.notes, contract.Note{Target: r.Req, SourceItem: contract.SourceItem(src, r.Feature), Text: r.Note})
 	}
-	if f.PRNumber > 0 { // product documents of other features changed in the branch: notes of rows since removed
+	if f.PRNumber > 0 { // documents of the area of other features changed in the branch: notes of rows since removed
 		files, err := s.Git.PRChangedFiles(ctx, token, f.PRNumber)
 		if err != nil && !errors.Is(err, git.ErrNotFound) {
 			return nil, nil, err
 		}
 		for _, cf := range files {
 			loc, ok := specindex.ParsePath(cf.Path)
-			if !ok || loc.Folder == f.UniqueID || loc.Area != "product" || !loc.IsDocument() || cf.Status == "removed" {
+			if !ok || loc.Folder == f.UniqueID || loc.Area != area || !loc.IsDocument() || cf.Status == "removed" {
 				continue
 			}
 			add(loc.Folder, cf.Path)
@@ -223,11 +240,14 @@ func (s *Service) plan(ctx context.Context, token string, f *specdata.Feature, p
 	return order, byKey, nil
 }
 
-// Align computes the notes of a product document in the branch of the feature
-// (tech §5.1): the changed documents of other features and the rows that got
-// no note.
-func (s *Service) Align(ctx context.Context, token string, f *specdata.Feature, product string) ([]git.FileChange, []RowError, error) {
-	rows, errs, err := s.check(ctx, f.UniqueID, product)
+// Align computes the notes of a product or arch document in the branch of the
+// feature (tech §5.1, FTR.HMR.DEV-0003 R14): the changed documents of other
+// features and the rows that got no note. Other areas have nothing to align.
+func (s *Service) Align(ctx context.Context, token string, f *specdata.Feature, area, doc string) ([]git.FileChange, []RowError, error) {
+	if !Supported(area) {
+		return nil, nil, nil
+	}
+	rows, errs, err := s.check(ctx, f.UniqueID, area, doc)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -236,9 +256,9 @@ func (s *Service) Align(ctx context.Context, token string, f *specdata.Feature, 
 		if e.Requirement != nil {
 			req = *e.Requirement
 		}
-		slog.InfoContext(ctx, "spec change row rejected", "feature", f.UniqueID, "target", e.Feature, "requirement", req, "reason", e.Reason)
+		slog.InfoContext(ctx, "spec change row rejected", "feature", f.UniqueID, "area", area, "target", e.Feature, "item", req, "reason", e.Reason)
 	}
-	order, targets, err := s.plan(ctx, token, f, product, rows)
+	order, targets, err := s.plan(ctx, token, f, area, doc, rows)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -252,7 +272,7 @@ func (s *Service) Align(ctx context.Context, token string, f *specdata.Feature, 
 		if err != nil {
 			return nil, nil, err
 		}
-		next := markdown.ApplyNotes(string(file.Content), f.UniqueID, t.notes)
+		next := contract.ApplyNotes(string(file.Content), contract.Area(area), f.UniqueID, t.notes, s.lang())
 		if next != string(file.Content) {
 			out = append(out, git.FileChange{Path: t.path, Content: []byte(next)})
 		}
@@ -260,9 +280,13 @@ func (s *Service) Align(ctx context.Context, token string, f *specdata.Feature, 
 	return out, errs, nil
 }
 
-// Item is a row of the block «Изменения в других решениях» (tech §2.1).
+// Item is a row of the block «Изменения в других решениях» (tech §2.1,
+// FTR.HMR.DEV-0003 tech §2.5): Requirement is the old name of Item, kept for
+// one version of the web.
 type Item struct {
 	Feature     string    `json:"feature"`
+	Item        *string   `json:"item"`
+	Kind        string    `json:"kind"` // requirement | decision
 	Requirement *string   `json:"requirement"`
 	Note        string    `json:"note"`
 	State       string    `json:"state"` // marked | pending | error
@@ -270,41 +294,50 @@ type Item struct {
 	Error       *RowError `json:"error,omitempty"`
 }
 
-// Items are the rows of the section with their state in the branch (R7).
-func (s *Service) Items(ctx context.Context, token string, f *specdata.Feature, product string) ([]Item, error) {
-	rows, _, err := s.check(ctx, f.UniqueID, product)
+// Items are the rows of the section of a product or arch document with their
+// state in the branch (R7, FTR.HMR.DEV-0003 R16).
+func (s *Service) Items(ctx context.Context, token string, f *specdata.Feature, area, doc string) ([]Item, error) {
+	if !Supported(area) {
+		return []Item{}, nil
+	}
+	rows, _, err := s.check(ctx, f.UniqueID, area, doc)
 	if err != nil {
 		return nil, err
 	}
-	reqs := specindex.Requirements(product)
+	src := contract.Parse(doc, contract.Area(area))
+	kind := contract.KindOf(contract.Area(area))
 	docs := map[string]string{}
 	out := make([]Item, 0, len(rows))
 	for _, r := range rows {
-		it := Item{Feature: r.Feature, Note: r.Note, State: "error", Error: r.err}
+		it := Item{Feature: r.Feature, Kind: kind, Note: r.Note, State: "error", Error: r.err}
 		if r.Req != "" {
 			req := r.Req
-			it.Requirement = &req
+			it.Item, it.Requirement = &req, &req
 		}
-		it.URL = "/spec/" + r.Feature + "/product" // the route of the navigator
+		it.URL = "/spec/" + r.Feature + "/" + area // the route of the navigator
 		if r.Req != "" {
 			it.URL += "#" + strings.ToLower(r.Req)
 		}
 		if r.err == nil {
-			doc, ok := docs[r.path]
+			target, ok := docs[r.path]
 			if !ok {
 				file, err := s.Git.GetFile(ctx, token, f.Branch, r.path)
 				if err != nil && !errors.Is(err, git.ErrNotFound) {
 					return nil, err
 				}
 				if file != nil {
-					doc = string(file.Content)
+					target = string(file.Content)
 				}
-				docs[r.path] = doc
+				docs[r.path] = target
 			}
-			line := markdown.NoteLine(f.UniqueID, markdown.Note{Req: r.Req, SourceReq: sourceReq(reqs, r.Feature), Text: r.Note})
+			// marked: the target has the note of this row, in any language of the contract (R22)
+			want := contract.Note{Target: r.Req, Source: f.UniqueID, SourceItem: contract.SourceItem(src, r.Feature), Text: noteText(r.Note)}
 			it.State = "pending"
-			if hasLine(doc, line) {
-				it.State = "marked"
+			for _, n := range contract.Parse(target, contract.Area(area)).Notes {
+				if n.Target == want.Target && n.Source == want.Source && n.SourceItem == want.SourceItem && noteText(n.Text) == want.Text {
+					it.State = "marked"
+					break
+				}
 			}
 		}
 		out = append(out, it)
@@ -312,13 +345,10 @@ func (s *Service) Items(ctx context.Context, token string, f *specdata.Feature, 
 	return out, nil
 }
 
-func hasLine(doc, line string) bool {
-	for _, l := range strings.Split(doc, "\n") {
-		if strings.TrimSpace(l) == line {
-			return true
-		}
-	}
-	return false
+// noteText is the text of a note as the contract writes it: without the stars
+// and the final full stop.
+func noteText(s string) string {
+	return strings.TrimRight(strings.TrimSpace(strings.Trim(strings.TrimSpace(s), "*")), ".")
 }
 
 // ErrInvalid is 409 changes_invalid with the wrong rows (tech §2.4).
@@ -326,14 +356,14 @@ func ErrInvalid(rows []RowError) error {
 	return apperr.Conflict("changes_invalid", "some rows of «Изменения в других решениях» cannot be applied: fix them first").With("rows", rows)
 }
 
-// Verify refuses a product document whose section has wrong rows (R3): 409
-// changes_invalid, before anything is committed.
-func (s *Service) Verify(ctx context.Context, token string, f *specdata.Feature) error {
-	doc, err := s.product(ctx, token, f)
+// Verify refuses a product or arch document whose section has wrong rows (R3):
+// 409 changes_invalid, before anything is committed.
+func (s *Service) Verify(ctx context.Context, token string, f *specdata.Feature, area string) error {
+	doc, err := s.document(ctx, token, f, area)
 	if doc == nil || err != nil {
 		return err
 	}
-	errs, err := s.Check(ctx, f.UniqueID, *doc)
+	errs, err := s.Check(ctx, f.UniqueID, area, *doc)
 	if err != nil {
 		return err
 	}
@@ -344,16 +374,19 @@ func (s *Service) Verify(ctx context.Context, token string, f *specdata.Feature)
 	return nil
 }
 
-// Ensure aligns the notes before the product gate moves on (R3, R6): the
-// product document as it is in the branch, wrong rows refuse with 409
-// changes_invalid, changed notes are committed with the trailer Generated.
-// A feature without a product document has nothing to align.
-func (s *Service) Ensure(ctx context.Context, token string, f *specdata.Feature) error {
-	doc, err := s.product(ctx, token, f)
+// Ensure aligns the notes before a product or arch gate moves on (R3, R6): the
+// document as it is in the branch, wrong rows refuse with 409 changes_invalid,
+// changed notes are committed with the trailer Generated. A feature without
+// the document has nothing to align.
+func (s *Service) Ensure(ctx context.Context, token string, f *specdata.Feature, area string) error {
+	if !Supported(area) {
+		return nil
+	}
+	doc, err := s.document(ctx, token, f, area)
 	if doc == nil || err != nil {
 		return err
 	}
-	changes, errs, err := s.Align(ctx, token, f, *doc)
+	changes, errs, err := s.Align(ctx, token, f, area, *doc)
 	if err != nil {
 		return err
 	}
@@ -374,9 +407,12 @@ func (s *Service) Ensure(ctx context.Context, token string, f *specdata.Feature)
 	return err
 }
 
-// product is the product document of the feature in its branch, nil — none.
-func (s *Service) product(ctx context.Context, token string, f *specdata.Feature) (*string, error) {
-	file, err := s.Git.GetFile(ctx, token, f.Branch, git.SpecPath(f.DomainKey, f.SystemKey, f.UniqueID, "product"))
+// document is a document of the feature in its branch, nil — none.
+func (s *Service) document(ctx context.Context, token string, f *specdata.Feature, area string) (*string, error) {
+	if !Supported(area) {
+		return nil, nil
+	}
+	file, err := s.Git.GetFile(ctx, token, f.Branch, git.SpecPath(f.DomainKey, f.SystemKey, f.UniqueID, area))
 	if errors.Is(err, git.ErrNotFound) {
 		return nil, nil
 	}
