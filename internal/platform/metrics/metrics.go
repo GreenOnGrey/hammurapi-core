@@ -131,6 +131,14 @@ var (
 	CITestCaseRequests = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "hammurapi_ci_test_cases_requests_total", Help: "Requests of CI for the test cases of a service by result (ok, unauthorized, revoked, forbidden, not_found, rate_limited, error) and by the way in (oidc_github, oidc_gitlab, oidc — the keys of the issuer not reachable, installation, none).",
 	}, []string{"result", "auth"})
+	// FTR.HMR.SPEC-0004 arch §7: submissions refused by the services, the C4 diagram and the contract files.
+	SpecContractRejections = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "hammurapi_spec_contract_rejections_total", Help: "Violations of the document contract that refused a submission of arch or tech, by area and check.",
+	}, []string{"area", "check"})
+	// FTR.HMR.SPEC-0004 tech §3.2: the catalog for the CI of the repository of specifications.
+	CIServicesRequests = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "hammurapi_ci_services_requests_total", Help: "Requests of CI for the keys of the catalog by result and by the way in, as hammurapi_ci_test_cases_requests_total.",
+	}, []string{"result", "auth"})
 	CIChecks = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "hammurapi_ci_checks", Help: "Repositories by the status of their check of speclint (target: spec, service).",
 	}, []string{"target", "status"})
@@ -163,7 +171,7 @@ func init() {
 		SpecScanRuns, SpecScanDuration, SpecIndexIssuesOpen, SpecDocuments, SpecIndexedFeatures,
 		WorkflowRuns, WorkflowTransitionDuration, WorkflowBlocked, EffectsFailed, CodeTaskStates, CodeTaskDuration,
 		CodeTokens, DeployRuns, ReleaseRollbacks,
-		SpecRuns, SpecRunDuration, SpecRequests, SpecChangeNotes, RulesContractRejections, CITestCaseRequests, CIChecks, CICheckPRs, FeatureTopicsCreated, DiscoveryRequests, DiscoveryRequestDuration, NabuNotices, IssueTopicsCreated, IssueTopicsArchived, DiscoveryQuestionsDropped,
+		SpecRuns, SpecRunDuration, SpecRequests, SpecChangeNotes, RulesContractRejections, CITestCaseRequests, CIServicesRequests, SpecContractRejections, CIChecks, CICheckPRs, FeatureTopicsCreated, DiscoveryRequests, DiscoveryRequestDuration, NabuNotices, IssueTopicsCreated, IssueTopicsArchived, DiscoveryQuestionsDropped,
 	)
 }
 

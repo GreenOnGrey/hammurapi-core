@@ -10,7 +10,7 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/GreenOnGrey/speclint/contract"
+	"github.com/GreenOnGrey/speclint/v2/contract"
 
 	"github.com/GreenOnGrey/hammurapi-core/internal/apperr"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/specindex"

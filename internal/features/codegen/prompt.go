@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/GreenOnGrey/hammurapi-core/internal/features/speccontract"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/git"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/markdown"
 )
@@ -87,6 +88,8 @@ func Prompt(d *Description) string {
 			fmt.Fprintf(&b, "\n=== %s specification ===\n%s\n", a, s)
 		}
 	}
+	// FTR.HMR.SPEC-0004 R8: the contract agreed at the gate tech
+	speccontract.WriteContracts(&b, d.Contracts, "\n=== contract tech/%s — implement the API exactly as agreed ===\n")
 	b.WriteString("\nReport progress with report_progress. End with a short summary and the line \"Implemented: R1, R2\".")
 	return b.String()
 }

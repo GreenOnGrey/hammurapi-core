@@ -11,7 +11,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/GreenOnGrey/speclint/contract"
+	"github.com/GreenOnGrey/speclint/v2/contract"
 	"go.yaml.in/yaml/v3"
 
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/markdown"

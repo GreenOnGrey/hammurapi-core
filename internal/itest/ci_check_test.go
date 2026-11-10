@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -19,8 +20,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/GreenOnGrey/speclint/contract"
-	"github.com/GreenOnGrey/speclint/starter"
+	"github.com/GreenOnGrey/speclint/v2/contract"
+	"github.com/GreenOnGrey/speclint/v2/starter"
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/mock/gomock"
 
@@ -160,7 +161,11 @@ func TestCICheck(t *testing.T) {
 	srv := httptest.NewServer(r)
 	defer srv.Close()
 	get := func(service, token string) (int, map[string]any) {
-		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/ci/services/"+service+"/test-cases", nil)
+		path := "/ci/services/" + service + "/test-cases"
+		if service == "" { // FTR.HMR.SPEC-0004 tech §3.2: the catalog
+			path = "/ci/services"
+		}
+		req, _ := http.NewRequest(http.MethodGet, srv.URL+path, nil)
 		if token != "" {
 			req.Header.Set("Authorization", "Bearer "+token)
 		}
@@ -213,6 +218,16 @@ func TestCICheck(t *testing.T) {
 	if code, body = get("booking", job("fms/other")); code != 403 || body["error"].(map[string]any)["code"] != "repo_not_in_catalog" {
 		t.Fatalf("SCOPE-03: %d %v", code, body)
 	}
+	// FTR.HMR.SPEC-0004 SVC-04: the catalog for the CI of the repository of specifications only
+	if code, body = get("", job("Org/Specs")); code != 200 || fmt.Sprint(body["services"]) != "[booking booking-admin pricing]" {
+		t.Fatalf("catalog: %d %v", code, body)
+	}
+	if code, body = get("", job("fms/booking")); code != 403 || body["error"].(map[string]any)["code"] != "token_scope" {
+		t.Fatalf("catalog to a service: %d %v", code, body)
+	}
+	if code, _ = get("", ""); code != 401 {
+		t.Fatalf("catalog without a token: %d", code)
+	}
 	// another audience; no token; a token of a service of SPEC-0002
 	if code, _ = get("booking", gh.token(t, map[string]any{"iss": gh.URL, "aud": "https://other.example", "repository": "fms/booking"})); code != 401 {
 		t.Fatalf("another audience: %d", code)
@@ -235,7 +250,7 @@ func TestCICheck(t *testing.T) {
 	if stored != 1 || !strings.HasPrefix(issued.Token, "hmr_ci_") {
 		t.Fatalf("INST-01: %d", stored)
 	}
-	for _, key := range []string{"booking", "pricing"} {
+	for _, key := range []string{"booking", "pricing", ""} {
 		if code, _ = get(key, issued.Token); code != 200 {
 			t.Fatalf("INST-01 %s: %d", key, code)
 		}

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/GreenOnGrey/speclint/contract"
-	"github.com/GreenOnGrey/speclint/starter"
+	"github.com/GreenOnGrey/speclint/v2/contract"
+	"github.com/GreenOnGrey/speclint/v2/starter"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.yaml.in/yaml/v3"
 
@@ -364,6 +364,12 @@ func (s *Service) bump(ctx context.Context, sc *scanned) error {
 	}
 	body := fmt.Sprintf("Hammurapi is on the document contract %s: the check of speclint follows it.\n\n"+
 		"Only the version line changes (FTR.HMR.SPEC-0002 R7).", contract.Version)
+	if a, _ := starter.ParseVersion(old); a[0] > 0 && a[0] < majorOf(contract.Version) && sc.r.target == TargetSpec {
+		// a new major version fails documents that passed the old one: they go to the baseline once (FTR.HMR.SPEC-0004 R9)
+		body += fmt.Sprintf("\n\nThe contract %d fails documents that passed %s. Accept the existing ones once: run "+
+			"`speclint spec -write-baseline` (the image ghcr.io/greenongrey/speclint:%s) and commit speclint-baseline.txt to this branch.",
+			majorOf(contract.Version), old, contract.Version)
+	}
 	pr, err := prov.CreatePR(ctx, token, branch, sc.branch, title, body)
 	if err != nil {
 		result = "error"
@@ -373,6 +379,11 @@ func (s *Service) bump(ctx context.Context, sc *scanned) error {
 	sc.PR = &PRRef{Number: pr.Number, URL: pr.URL, Kind: "bump"}
 	sc.Error = nil
 	return s.save(ctx, sc.r.target, sc.Status)
+}
+
+func majorOf(v string) int {
+	p, _ := starter.ParseVersion(v)
+	return p[0]
 }
 
 // canManage: the owners of the service and the administrators (FTR.HMR.SPEC-0002 R11, tech §6).

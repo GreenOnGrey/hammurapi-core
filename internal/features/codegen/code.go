@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 
 	"github.com/GreenOnGrey/hammurapi-core/internal/cycledata"
 	"github.com/GreenOnGrey/hammurapi-core/internal/domain"
+	"github.com/GreenOnGrey/hammurapi-core/internal/features/speccontract"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/workflows"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/agent"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/events"
@@ -63,9 +65,14 @@ type Description struct {
 	Requirements []cycledata.Requirement `json:"requirements"`
 	TestCases    []cycledata.TestCase    `json:"testCases"`
 	Specs        map[string]string       `json:"specs"`
-	Input        TaskInput               `json:"input"`
-	Release      string                  `json:"release,omitempty"`
+	// Contracts are the contract files of the service next to tech: name → content (FTR.HMR.SPEC-0004 R8).
+	Contracts map[string]string `json:"contracts,omitempty"`
+	Input     TaskInput         `json:"input"`
+	Release   string            `json:"release,omitempty"`
 }
+
+// contractMaxBytes bounds a contract in the prompt of a code task: the default limit of the preview of files.
+const contractMaxBytes = 5 << 20
 
 // Result is the stored result of a code task (agent_tasks.result).
 type Result struct {
@@ -185,6 +192,11 @@ func (c *Code) describe(ctx context.Context, t *cycledata.Task) (*Description, e
 				if file, err := c.Git.GetFile(ctx, token, f.Branch, git.SpecPath(f.DomainKey, f.SystemKey, f.UniqueID, string(a))); err == nil {
 					d.Specs[string(a)] = string(file.Content)
 				}
+			}
+			// as the documents above: without the contract the task still runs
+			if d.Contracts, err = speccontract.Contracts(ctx, c.Git, token, f, svc.Key, contractMaxBytes); err != nil {
+				slog.WarnContext(ctx, "the contracts of the service are not read", "feature", f.UniqueID, "service", svc.Key, "err", err)
+				d.Contracts = nil
 			}
 		}
 	}

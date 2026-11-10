@@ -128,6 +128,8 @@ func ServeFile(w http.ResponseWriter, name, mimeType string, data []byte, mode s
 		_, _ = w.Write(data)
 	case mimeType == "text/html" && preview:
 		httpx.JSON(w, http.StatusOK, map[string]string{"html": string(data)})
+	case IsContract(mimeType) && preview: // the text for the viewer of the API, which renders it in its own frame
+		httpx.JSON(w, http.StatusOK, map[string]string{"text": string(data)})
 	default:
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))

@@ -6,8 +6,11 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/GreenOnGrey/speclint/v2/contract"
+
 	"github.com/GreenOnGrey/hammurapi-core/internal/cycledata"
 	"github.com/GreenOnGrey/hammurapi-core/internal/domain"
+	"github.com/GreenOnGrey/hammurapi-core/internal/features/speccontract"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/mcp"
 )
 
@@ -100,11 +103,13 @@ const (
 )
 
 var (
-	fileNameRe  = regexp.MustCompile(`^[a-z0-9._-]{1,64}\.(html|svg)$`)
-	baseTagRe   = regexp.MustCompile(`(?i)<base[\s>]`)
-	scriptSrcRe = regexp.MustCompile(`(?i)<script[^>]*\ssrc\s*=`)
-	linkTagRe   = regexp.MustCompile(`(?i)<link\b[^>]*>`)
-	hrefRe      = regexp.MustCompile(`(?i)href\s*=\s*["']?https?://([^/"'\s>]+)`)
+	fileNameRe = regexp.MustCompile(`^[a-z0-9._-]{1,64}\.(html|svg)$`)
+	// contractNameRe: a key of the catalog and the kind of the contract (FTR.HMR.SPEC-0004 R6)
+	contractNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}\.(openapi\.(yaml|yml|json)|proto)$`)
+	baseTagRe      = regexp.MustCompile(`(?i)<base[\s>]`)
+	scriptSrcRe    = regexp.MustCompile(`(?i)<script[^>]*\ssrc\s*=`)
+	linkTagRe      = regexp.MustCompile(`(?i)<link\b[^>]*>`)
+	hrefRe         = regexp.MustCompile(`(?i)href\s*=\s*["']?https?://([^/"'\s>]+)`)
 )
 
 // CheckFile tells what is wrong with a call of submit_gate_file, "" — nothing.
@@ -117,9 +122,12 @@ func CheckFile(w *mcp.WriterScope, raw json.RawMessage) string {
 	if err := json.Unmarshal(raw, &in); err != nil {
 		return "invalid arguments"
 	}
+	if in.Area == domain.AreaTech { // FTR.HMR.SPEC-0004 R8: a contract of a service
+		return checkContractFile(w, in.Path, in.Content)
+	}
 	switch {
 	case in.Area != domain.AreaDesign || !w.Allows(in.Area):
-		return "Files are submitted only for the design gate of this run"
+		return "Files are submitted only for the design and tech gates of this run"
 	case in.Path == "spec.md" || !fileNameRe.MatchString(in.Path):
 		return "path: one file name, a-z 0-9 . _ -, .html or .svg"
 	case len(in.Content) > MaxSubmittedFile:
@@ -131,6 +139,24 @@ func CheckFile(w *mcp.WriterScope, raw json.RawMessage) string {
 		if m := hrefRe.FindStringSubmatch(l); m != nil && m[1] != "fonts.googleapis.com" && m[1] != "fonts.gstatic.com" {
 			return "the mockup must be self-contained: only fonts may come from the network"
 		}
+	}
+	return ""
+}
+
+// checkContractFile accepts a contract of a service for tech: <service>.openapi.yaml|yml|json or <service>.proto, in
+// its format (FTR.HMR.SPEC-0004 R6, R8). The service of the name is checked when the gate is submitted.
+func checkContractFile(w *mcp.WriterScope, name, content string) string {
+	svc, _, ok := contract.ContractFile(name)
+	switch {
+	case !w.Allows(domain.AreaTech):
+		return "Files are submitted only for the design and tech gates of this run"
+	case !ok || !contractNameRe.MatchString(name):
+		return "path: <service key>.openapi.yaml, .openapi.yml, .openapi.json or <service key>.proto; a-z 0-9 . _ -"
+	case len(content) > MaxSubmittedFile:
+		return fmt.Sprintf("the file is larger than %d bytes: submit a smaller one", MaxSubmittedFile)
+	}
+	for _, v := range speccontract.CheckFile("tech/"+name, []byte(content), []string{svc}) {
+		return fmt.Sprintf("%s (line %d): %s", v.Check, v.Line, v.Message)
 	}
 	return ""
 }

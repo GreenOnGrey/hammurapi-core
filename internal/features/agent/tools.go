@@ -702,9 +702,9 @@ func Tools(d ToolDeps) []mcp.Tool {
 		},
 		{
 			Name:        "submit_gate_file",
-			Description: "Submit a file of the design gate beside its spec.md: a self-contained HTML mockup (mockups.html) or an SVG, up to 2 MiB, up to 3 files, no network dependencies except fonts.",
+			Description: "Submit a file of a gate beside its spec.md, up to 2 MiB: for design a self-contained HTML mockup (mockups.html) or an SVG, up to 3 files, no network dependencies except fonts; for tech the contract of a service, <service key>.openapi.yaml (OpenAPI 3) or <service key>.proto (proto3).",
 			Modes:       []string{mcp.ModeGenerate},
-			InputSchema: schema(map[string]any{"area": map[string]any{"type": "string", "enum": []string{"design"}},
+			InputSchema: schema(map[string]any{"area": map[string]any{"type": "string", "enum": []string{"design", "tech"}},
 				"path": map[string]any{"type": "string"}, "content": map[string]any{"type": "string"}}, "area", "path", "content"),
 			Handler: func(ctx context.Context, g mcp.Grant, raw json.RawMessage) (string, error) {
 				if msg := CheckFile(g.Writer, raw); msg != "" {

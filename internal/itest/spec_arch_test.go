@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/GreenOnGrey/speclint/contract"
+	"github.com/GreenOnGrey/speclint/v2/contract"
 	"github.com/google/uuid"
 	"go.uber.org/mock/gomock"
 
