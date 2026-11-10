@@ -127,6 +127,16 @@ var (
 	RulesContractRejections = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "hammurapi_rules_contract_rejections_total", Help: "Rules templates refused by the document contract by stage (propose, approve).",
 	}, []string{"stage"})
+	// FTR.HMR.SPEC-0002 arch §7: the check of speclint in CI of repositories.
+	CITestCaseRequests = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "hammurapi_ci_test_cases_requests_total", Help: "Requests of CI for the test cases of a service by result (ok, unauthorized, revoked, not_found, rate_limited, error).",
+	}, []string{"result"})
+	CIChecks = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "hammurapi_ci_checks", Help: "Repositories by the status of their check of speclint (target: spec, service).",
+	}, []string{"target", "status"})
+	CICheckPRs = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "hammurapi_ci_check_prs_total", Help: "Pull requests of the check of speclint by kind (propose, bump) and result.",
+	}, []string{"kind", "result"})
 	SpecRequests = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "hammurapi_spec_requests_total", Help: "Instructions to the writer by the state they reached (queued, running, done, failed).",
 	}, []string{"state"})
@@ -153,7 +163,7 @@ func init() {
 		SpecScanRuns, SpecScanDuration, SpecIndexIssuesOpen, SpecDocuments, SpecIndexedFeatures,
 		WorkflowRuns, WorkflowTransitionDuration, WorkflowBlocked, EffectsFailed, CodeTaskStates, CodeTaskDuration,
 		CodeTokens, DeployRuns, ReleaseRollbacks,
-		SpecRuns, SpecRunDuration, SpecRequests, SpecChangeNotes, RulesContractRejections, FeatureTopicsCreated, DiscoveryRequests, DiscoveryRequestDuration, NabuNotices, IssueTopicsCreated, IssueTopicsArchived, DiscoveryQuestionsDropped,
+		SpecRuns, SpecRunDuration, SpecRequests, SpecChangeNotes, RulesContractRejections, CITestCaseRequests, CIChecks, CICheckPRs, FeatureTopicsCreated, DiscoveryRequests, DiscoveryRequestDuration, NabuNotices, IssueTopicsCreated, IssueTopicsArchived, DiscoveryQuestionsDropped,
 	)
 }
 

@@ -45,6 +45,8 @@ type PublicConfig struct {
 	// NabuWebURL is the site of Nabu: the card of a code task links to its
 	// run (FTR.HMR.CMN-0007 R11); "" — no link. The agent is always Nabu (R1).
 	NabuWebURL string `json:"nabuWebUrl,omitempty"`
+	// ContractVersion is the version of the document contract: the version of speclint for CI (FTR.HMR.SPEC-0002 R1).
+	ContractVersion string `json:"contractVersion"`
 }
 
 // LoginInfo describes the sign-in provider for the sign-in screen.

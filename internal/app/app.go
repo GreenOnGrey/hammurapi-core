@@ -30,6 +30,7 @@ import (
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/attachments"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/auth"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/catalog"
+	"github.com/GreenOnGrey/hammurapi-core/internal/features/cicheck"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/ciresults"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/codegen"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/deploy"
@@ -380,6 +381,7 @@ func RunAPI(ctx context.Context, cfg *config.Config) error {
 	validationSvc := validation.NewService(c.pool, c.store, c.provider, tokens, c.events)
 	releaseSvc := releases.NewService(c.pool, c.store, c.events)
 	serviceSvc := services.NewService(c.pool, sl.catalog)
+	ciSvc := cicheck.NewService(c.pool, c.provider, tokens, branch, cfg.PublicAPIURL) // FTR.HMR.SPEC-0002
 	overviewSvc := overview.NewService(c.pool)
 	trigger := cicd.New(c.provider)
 	deployEffects := &deploy.Effects{Q: c.pool, Trigger: trigger, Secrets: c.secrets, PublicURL: cfg.HooksURL}
@@ -428,6 +430,7 @@ func RunAPI(ctx context.Context, cfg *config.Config) error {
 		BootstrapAdminsConfigured: len(cfg.BootstrapAdmins) > 0,
 		Login:                     loginInfo(cfg, c.authSvc),
 		NabuWebURL:                cfg.NabuWebURL,
+		ContractVersion:           contract.Version,
 	}, strings.HasPrefix(cfg.PublicAPIURL, "https://")).WithWeb(webRedirectBase(cfg), cfg.CookieDomain)
 
 	r := chi.NewRouter()
@@ -436,6 +439,7 @@ func RunAPI(ctx context.Context, cfg *config.Config) error {
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(authH.Authenticate)
 		authH.Public(r)
+		ciSvc.CIRoutes(r) // the token of a service, not a session (FTR.HMR.SPEC-0002 arch A4)
 		r.Group(func(r chi.Router) {
 			r.Use(auth.RequireSession)
 			authH.Private(r)
@@ -457,6 +461,7 @@ func RunAPI(ctx context.Context, cfg *config.Config) error {
 			validationSvc.Routes(r)
 			releaseSvc.Routes(r)
 			serviceSvc.Routes(r)
+			ciSvc.Routes(r)
 			if nabuChat != nil {
 				nabuChat.Routes(r) // the chat is the personal agent in Nabu (R5)
 			}
@@ -609,6 +614,10 @@ func RunWorker(ctx context.Context, cfg *config.Config) error {
 	})
 	g.Go(func() error { return engine.Run(gctx) })
 	g.Go(func() error { return sl.spec.Run(gctx) }) // checks of the specification repository (FTR.HMR.CMN-0005)
+	// FTR.HMR.SPEC-0002: the check of speclint in CI of the repositories, the pull requests of its version
+	g.Go(func() error {
+		return cicheck.NewService(c.pool, c.provider, tokens, cfg.GitDefaultBranch, cfg.PublicAPIURL).Run(gctx)
+	})
 	g.Go(func() error {
 		// Full catalog synchronization once a day (arch §10); pushes trigger it in between.
 		t := time.NewTicker(24 * time.Hour)
