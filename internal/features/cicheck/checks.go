@@ -44,8 +44,10 @@ type Service struct {
 	tokens     git.TokenSource
 	specBranch string
 	publicURL  string   // the public address of the API: the mode service of a service calls it
-	limits     *limiter // per token
+	limits     *limiter // per token or repository
 	failures   *limiter // failed attempts per address
+	// OIDC verifies the OIDC tokens of CI jobs (FTR.HMR.SPEC-0003); nil — only the installation token.
+	OIDC *OIDC
 }
 
 // NewService creates the service.
@@ -223,7 +225,8 @@ func (s *Service) read(ctx context.Context, r *repoOf, prev *Status, token strin
 	}
 	out.file = file.Content
 	v, managed := starter.CIVersion(file.Content)
-	if !managed || !forTarget(file.Content, r) {
+	// a file of 1.1.0 asks for the token of a service, which is gone: only a new file fixes it (FTR.HMR.SPEC-0003 A6)
+	if !managed || !forTarget(file.Content, r) || strings.Contains(string(file.Content), "HAMMURAPI_SERVICE_TOKEN") {
 		st.Status = StatusManual
 		return out, nil
 	}
@@ -372,6 +375,11 @@ func (s *Service) bump(ctx context.Context, sc *scanned) error {
 	return s.save(ctx, sc.r.target, sc.Status)
 }
 
+// canManage: the owners of the service and the administrators (FTR.HMR.SPEC-0002 R11, tech §6).
+func canManage(p *domain.Principal, key string) bool {
+	return p.Owns(key) || p.IsAnyAdmin()
+}
+
 // canPropose: the global administrators for the repository of specifications, the owners of the service and the
 // administrators for a service (R6, R11).
 func canPropose(p *domain.Principal, r *repoOf) bool {
@@ -476,9 +484,8 @@ func proposeBody(p starter.CIParams, manualInclude bool) string {
 	if p.Mode == "service" {
 		fmt.Fprintf(&b, "The check asks Hammurapi at %s for the test cases of the features of service `%s` and fails when "+
 			"a test case of a feature in code generation or later has no test in the code.\n\n"+
-			"Before merging: issue the token in the card of the service in Hammurapi and put it into the secret "+
-			"(CI/CD variable) `HAMMURAPI_SERVICE_TOKEN` of this repository. Old features without tests go to "+
-			"`speclint-baseline.txt` (`speclint service -write-baseline`).\n\n", p.Hammurapi, p.Service)
+			"The job presents the OIDC token of its CI: no secret is needed (FTR.HMR.SPEC-0003). Old features without "+
+			"tests go to `speclint-baseline.txt` (`speclint service -write-baseline`).\n\n", p.Hammurapi, p.Service)
 	} else {
 		b.WriteString("The check reads the documents and the rules by the document contract of Hammurapi.\n\n")
 	}

@@ -4,13 +4,20 @@ package itest
 
 import (
 	"context"
+	"crypto"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/GreenOnGrey/speclint/contract"
 	"github.com/GreenOnGrey/speclint/starter"
@@ -167,26 +174,22 @@ func TestCICheck(t *testing.T) {
 
 	owner := tu.User("owner:booking")
 	must(t, pool.QueryRow(ctx, `SELECT id FROM users WHERE username = 'olga'`).Scan(&owner.UserID))
+	global := tu.User("global")
+	global.UserID = owner.UserID
 	var ae *apperr.Error
-	// TOK-07: a user without rights on the service
-	if _, err := svc.IssueToken(ctx, tu.User("owner:pricing"), "booking"); !errors.As(err, &ae) || ae.Status != 403 {
-		t.Fatalf("TOK-07: %v", err)
-	}
-	// TOK-01: the token is shown once, the database keeps its hash and prefix
-	issued, err := svc.IssueToken(ctx, owner, "booking")
-	must(t, err)
-	var stored int
-	must(t, pool.QueryRow(ctx, `SELECT count(*) FROM service_tokens WHERE prefix = $1 AND token_hash <> convert_to($2, 'UTF8')`, issued.Prefix, issued.Token).Scan(&stored))
-	info, err := svc.Token(ctx, owner, "booking")
-	must(t, err)
-	if stored != 1 || !info.Issued || *info.Prefix != issued.Prefix || info.LastUsedAt != nil {
-		t.Fatalf("TOK-01: %d %+v", stored, info)
+
+	// FTR.HMR.SPEC-0003: the OIDC token of a CI job opens the services of its repository
+	gh := newCIIssuer(t)
+	svc.OIDC = &cicheck.OIDC{Issuers: map[string]string{gh.URL: "github"}, Audience: "https://hammurapi.example"}
+	must(t, cd.UpsertService(ctx, &cycledata.Service{Key: "booking-admin", Name: "booking-admin", Repo: "fms/booking", Source: "manual"}))
+	job := func(repo string) string {
+		return gh.token(t, map[string]any{"iss": gh.URL, "aud": "https://hammurapi.example", "repository": repo})
 	}
 
-	// SVC-06, SVC-07: the features, their phases, required from code generation on, rolled back not
-	code, body := get("booking", issued.Token)
+	// OIDC-01, SVC-06, SVC-07: the features, their phases, required from code generation on, rolled back not
+	code, body := get("booking", job("FMS/Booking"))
 	if code != 200 || body["contractVersion"] != contract.Version || len(body["cases"].([]any)) != 4 {
-		t.Fatalf("SVC-06: %d %v", code, body)
+		t.Fatalf("OIDC-01: %d %v", code, body)
 	}
 	required := map[string]bool{}
 	for _, f := range body["features"].([]any) {
@@ -196,45 +199,65 @@ func TestCICheck(t *testing.T) {
 	if !required["released"] || !required["codegen"] || required["spec"] || required["rolled_back"] {
 		t.Fatalf("SVC-07: %v", required)
 	}
-	// TOK-06: the use is seen in the card
-	if info, _ = svc.Token(ctx, owner, "booking"); info.LastUsedAt == nil {
-		t.Fatal("TOK-06: last_used_at")
+	// SCOPE-02: the other service of the same repository
+	if code, _ = get("booking-admin", job("fms/booking")); code != 200 {
+		t.Fatalf("SCOPE-02: %d", code)
 	}
-	// TOK-02: a token of booking for pricing
-	if code, body = get("pricing", issued.Token); code != 403 || body["error"].(map[string]any)["code"] != "token_scope" {
-		t.Fatalf("TOK-02: %d %v", code, body)
+	// SCOPE-01: a service of another repository; a missing one is refused the same way
+	for _, key := range []string{"pricing", "missing"} {
+		if code, body = get(key, job("fms/booking")); code != 403 || body["error"].(map[string]any)["code"] != "token_scope" {
+			t.Fatalf("SCOPE-01 %s: %d %v", key, code, body)
+		}
 	}
-	if code, _ = get("booking", "hmr_svc_unknown"); code != 401 {
-		t.Fatalf("an unknown token: %d", code)
+	// SCOPE-03: a repository outside the catalog
+	if code, body = get("booking", job("fms/other")); code != 403 || body["error"].(map[string]any)["code"] != "repo_not_in_catalog" {
+		t.Fatalf("SCOPE-03: %d %v", code, body)
 	}
-	if code, _ = get("missing", issued.Token); code != 403 { // a token does not tell which services exist
-		t.Fatalf("a missing service: %d", code)
+	// another audience; no token; a token of a service of SPEC-0002
+	if code, _ = get("booking", gh.token(t, map[string]any{"iss": gh.URL, "aud": "https://other.example", "repository": "fms/booking"})); code != 401 {
+		t.Fatalf("another audience: %d", code)
 	}
-	// TOK-05: the token of a service opens no session route
-	if code, _ = get("booking", ""); code != 401 {
-		t.Fatalf("no token: %d", code)
+	for _, tok := range []string{"", "hmr_svc_old", "hmr_ci_unknown"} {
+		if code, _ = get("booking", tok); code != 401 {
+			t.Fatalf("token %q: %d", tok, code)
+		}
 	}
-	// TOK-03: reissued — the old token is revoked, the new one works
-	again, err := svc.IssueToken(ctx, owner, "booking")
+
+	// INST-03: only the global administrators issue the installation token
+	if _, err := svc.IssueToken(ctx, owner); !errors.As(err, &ae) || ae.Status != 403 {
+		t.Fatalf("INST-03: %v", err)
+	}
+	// INST-01: shown once, the database keeps its hash and prefix, every service is open
+	issued, err := svc.IssueToken(ctx, global)
+	must(t, err)
+	var stored int
+	must(t, pool.QueryRow(ctx, `SELECT count(*) FROM ci_tokens WHERE prefix = $1 AND token_hash = sha256(convert_to($2, 'UTF8'))`, issued.Prefix, issued.Token).Scan(&stored))
+	if stored != 1 || !strings.HasPrefix(issued.Token, "hmr_ci_") {
+		t.Fatalf("INST-01: %d", stored)
+	}
+	for _, key := range []string{"booking", "pricing"} {
+		if code, _ = get(key, issued.Token); code != 200 {
+			t.Fatalf("INST-01 %s: %d", key, code)
+		}
+	}
+	if info, _ := svc.Token(ctx, global); !info.Issued || info.LastUsedAt == nil {
+		t.Fatalf("INST-01: %+v", info)
+	}
+	// INST-02: reissued — the old token is revoked, the new one works; then revoked
+	again, err := svc.IssueToken(ctx, global)
 	must(t, err)
 	if code, body = get("booking", issued.Token); code != 401 || body["error"].(map[string]any)["code"] != "token_revoked" {
-		t.Fatalf("TOK-03 old: %d %v", code, body)
+		t.Fatalf("INST-02 old: %d %v", code, body)
 	}
 	if code, _ = get("booking", again.Token); code != 200 {
-		t.Fatalf("TOK-03 new: %d", code)
+		t.Fatalf("INST-02 new: %d", code)
 	}
-	// TOK-04: revoked
-	must(t, svc.RevokeToken(ctx, owner, "booking"))
-	if code, _ = get("booking", again.Token); code != 401 {
-		t.Fatalf("TOK-04: %d", code)
-	}
-	if info, _ = svc.Token(ctx, owner, "booking"); info.Issued {
-		t.Fatal("TOK-04: still issued")
+	must(t, svc.RevokeToken(ctx, global))
+	if info, _ := svc.Token(ctx, global); info.Issued {
+		t.Fatal("revoked: still issued")
 	}
 
 	// SPECCI-03: no file and no PR
-	global := tu.User("global")
-	global.UserID = owner.UserID
 	st, err := svc.Check(ctx, cicheck.TargetSpec)
 	must(t, err)
 	if st.Status != cicheck.StatusNone || st.ContractVersion != contract.Version {
@@ -304,6 +327,18 @@ func TestCICheck(t *testing.T) {
 		!strings.Contains(file, `hammurapi-url: "https://hammurapi.example"`) || !strings.Contains(file, `service: "booking"`) {
 		t.Fatalf("SVCCI-01: %+v\n%s", st, file)
 	}
+	if strings.Contains(file, "secrets.") || !strings.Contains(file, "id-token: write") {
+		t.Fatalf("SVC-02: the file asks for a secret:\n%s", file)
+	}
+	// SVC-03: a file of 1.1.0 asks for the token of a service: manual, no PR of the bump
+	repos.merge(st.PR.Number)
+	old = strings.Replace(strings.Replace(file, "speclint@v"+contract.Version, "speclint@v1.1.0", 1), `service: "booking"`,
+		`service: "booking"`+"\n          token: ${{ secrets.HAMMURAPI_SERVICE_TOKEN }}", 1)
+	repos.files["fms/booking"]["main"][starter.GitHubCIPath] = old
+	prs = len(repos.prs)
+	if st, err = svc.Rescan(ctx, "service:booking"); err != nil || st.Status != cicheck.StatusManual || len(repos.prs) != prs {
+		t.Fatalf("SVC-03: %+v %v", st, err)
+	}
 	if st, err = svc.Check(ctx, "service:pricing"); err != nil || st.Status != cicheck.StatusNone || st.Repo != "fms/pricing" {
 		t.Fatalf("another service: %+v %v", st, err)
 	}
@@ -350,4 +385,44 @@ func TestCICheckGitLab(t *testing.T) {
 			}
 		}
 	}
+}
+
+// ciIssuer is an issuer of OIDC tokens of CI with one RSA key.
+type ciIssuer struct {
+	*httptest.Server
+	key *rsa.PrivateKey
+}
+
+func newCIIssuer(t *testing.T) *ciIssuer {
+	t.Helper()
+	k, err := rsa.GenerateKey(rand.Reader, 2048)
+	must(t, err)
+	is := &ciIssuer{key: k}
+	enc := base64.RawURLEncoding.EncodeToString
+	is.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			_ = json.NewEncoder(w).Encode(map[string]string{"jwks_uri": is.URL + "/keys"})
+		case "/keys":
+			_ = json.NewEncoder(w).Encode(map[string]any{"keys": []map[string]string{
+				{"kty": "RSA", "kid": "k1", "n": enc(k.N.Bytes()), "e": enc(big.NewInt(int64(k.E)).Bytes())}}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(is.Close)
+	return is
+}
+
+func (is *ciIssuer) token(t *testing.T, claims map[string]any) string {
+	t.Helper()
+	enc := base64.RawURLEncoding.EncodeToString
+	claims["exp"] = time.Now().Add(5 * time.Minute).Unix()
+	h, _ := json.Marshal(map[string]string{"alg": "RS256", "kid": "k1"})
+	c, _ := json.Marshal(claims)
+	signed := enc(h) + "." + enc(c)
+	sum := sha256.Sum256([]byte(signed))
+	sig, err := rsa.SignPKCS1v15(rand.Reader, is.key, crypto.SHA256, sum[:])
+	must(t, err)
+	return signed + "." + enc(sig)
 }

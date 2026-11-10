@@ -1,6 +1,7 @@
-// Package cicheck delivers the check of speclint to the CI of repositories (FTR.HMR.SPEC-0002): the tokens of
-// services, the test cases of a service for its CI, the status of the check in the repository of
-// specifications and of services, the pull requests that add the check and keep its version on the contract.
+// Package cicheck delivers the check of speclint to the CI of repositories (FTR.HMR.SPEC-0002): the test cases of
+// a service for its CI, opened by the OIDC token of the CI job or by the installation token (FTR.HMR.SPEC-0003),
+// the status of the check in the repository of specifications and of services, the pull requests that add the
+// check and keep its version on the contract.
 package cicheck
 
 import (
@@ -8,7 +9,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base32"
-	"errors"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -17,20 +18,19 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/GreenOnGrey/hammurapi-core/internal/apperr"
-	"github.com/GreenOnGrey/hammurapi-core/internal/cycledata"
 	"github.com/GreenOnGrey/hammurapi-core/internal/domain"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/postgres"
 )
 
-// tokenPrefix starts every token of a service: a scanner of secrets knows it, and the API tells it from a session.
-const tokenPrefix = "hmr_svc_"
+// tokenPrefix starts the installation token: a scanner of secrets knows it, and the API tells it from a JWT.
+const tokenPrefix = "hmr_ci_"
 
-// shownPrefix is the part of a token the card of the service shows: hmr_svc_ and four characters.
+// shownPrefix is the part of the token Settings show: hmr_ci_ and four characters.
 const shownPrefix = len(tokenPrefix) + 4
 
 var b32 = base32.StdEncoding.WithPadding(base32.NoPadding)
 
-// newToken is hmr_svc_ and 32 random bytes in base32 (arch §3.5).
+// newToken is hmr_ci_ and 32 random bytes in base32.
 func newToken() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
@@ -44,7 +44,7 @@ func hashToken(t string) []byte {
 	return h[:]
 }
 
-// TokenInfo is the token of a service as its card shows it (tech §3.2): never the token itself.
+// TokenInfo is the installation token as Settings show it (FTR.HMR.SPEC-0003 tech §3.2): never the token itself.
 type TokenInfo struct {
 	Issued     bool       `json:"issued"`
 	Prefix     *string    `json:"prefix"`
@@ -59,32 +59,21 @@ type IssuedToken struct {
 	Prefix string `json:"prefix"`
 }
 
-// canManage: the owners of the service and the administrators (R10).
-func canManage(p *domain.Principal, key string) bool {
-	return p.Owns(key) || p.IsAnyAdmin()
+func requireGlobal(p *domain.Principal) error {
+	if p == nil || !p.GlobalAdmin {
+		return apperr.NoRole("admin", "global")
+	}
+	return nil
 }
 
-func (s *Service) service(ctx context.Context, q postgres.Querier, key string) (*cycledata.Service, error) {
-	svc, err := cycledata.New(q).ServiceByKey(ctx, key)
-	if errors.Is(err, cycledata.ErrNotFound) {
-		return nil, apperr.NotFound("service_not_found", "service not found")
-	}
-	return svc, err
-}
-
-// Token describes the active token of a service.
-func (s *Service) Token(ctx context.Context, p *domain.Principal, key string) (*TokenInfo, error) {
-	if !canManage(p, key) {
-		return nil, apperr.Forbidden("forbidden", "only owners of the service and administrators see its token")
-	}
-	svc, err := s.service(ctx, s.pool, key)
-	if err != nil {
+// Token describes the active installation token.
+func (s *Service) Token(ctx context.Context, p *domain.Principal) (*TokenInfo, error) {
+	if err := requireGlobal(p); err != nil {
 		return nil, err
 	}
 	var t TokenInfo
-	err = s.pool.QueryRow(ctx, `SELECT t.prefix, t.created_at, u.display_name, t.last_used_at
-		FROM service_tokens t JOIN users u ON u.id = t.created_by
-		WHERE t.service_id = $1 AND t.revoked_at IS NULL`, svc.ID).Scan(&t.Prefix, &t.CreatedAt, &t.CreatedBy, &t.LastUsedAt)
+	err := s.pool.QueryRow(ctx, `SELECT t.prefix, t.created_at, u.display_name, t.last_used_at
+		FROM ci_tokens t JOIN users u ON u.id = t.created_by WHERE t.revoked_at IS NULL`).Scan(&t.Prefix, &t.CreatedAt, &t.CreatedBy, &t.LastUsedAt)
 	if postgres.IsNoRows(err) {
 		return &TokenInfo{}, nil
 	}
@@ -95,10 +84,13 @@ func (s *Service) Token(ctx context.Context, p *domain.Principal, key string) (*
 	return &t, nil
 }
 
-// IssueToken issues a token of a service; an active one is revoked in the same transaction (R10).
-func (s *Service) IssueToken(ctx context.Context, p *domain.Principal, key string) (*IssuedToken, error) {
-	if !canManage(p, key) {
-		return nil, apperr.Forbidden("forbidden", "only owners of the service and administrators issue its token")
+// ciTokenLock serializes issuing: two issues at once wait for each other, the second revokes the first.
+const ciTokenLock = "hashtext('ci_tokens')"
+
+// IssueToken issues the installation token; an active one is revoked in the same transaction (R3).
+func (s *Service) IssueToken(ctx context.Context, p *domain.Principal) (*IssuedToken, error) {
+	if err := requireGlobal(p); err != nil {
+		return nil, err
 	}
 	token, err := newToken()
 	if err != nil {
@@ -106,27 +98,21 @@ func (s *Service) IssueToken(ctx context.Context, p *domain.Principal, key strin
 	}
 	prefix := token[:shownPrefix]
 	err = postgres.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		svc, err := s.service(ctx, tx, key)
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(`+ciTokenLock+`)`); err != nil {
+			return err
+		}
+		tag, err := tx.Exec(ctx, `UPDATE ci_tokens SET revoked_at = now() WHERE revoked_at IS NULL`)
 		if err != nil {
 			return err
 		}
-		// two issues at once wait for each other: the second revokes the first
-		if _, err := tx.Exec(ctx, `SELECT 1 FROM services WHERE id = $1 FOR UPDATE`, svc.ID); err != nil {
-			return err
-		}
-		tag, err := tx.Exec(ctx, `UPDATE service_tokens SET revoked_at = now() WHERE service_id = $1 AND revoked_at IS NULL`, svc.ID)
-		if err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, `INSERT INTO service_tokens (service_id, token_hash, prefix, created_by) VALUES ($1, $2, $3, $4)`,
-			svc.ID, hashToken(token), prefix, p.UserID); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO ci_tokens (token_hash, prefix, created_by) VALUES ($1, $2, $3)`, hashToken(token), prefix, p.UserID); err != nil {
 			return err
 		}
 		kind := "ci_token_issued"
 		if tag.RowsAffected() > 0 {
 			kind = "ci_token_reissued"
 		}
-		return cycledata.New(tx).AddActivity(ctx, "service", svc.ID, kind, &p.UserID, false, map[string]any{"prefix": prefix})
+		return audit(ctx, p.UserID, kind, prefix)
 	})
 	if err != nil {
 		return nil, err
@@ -134,43 +120,43 @@ func (s *Service) IssueToken(ctx context.Context, p *domain.Principal, key strin
 	return &IssuedToken{Token: token, Prefix: prefix}, nil
 }
 
-// RevokeToken revokes the active token of a service; without one it does nothing.
-func (s *Service) RevokeToken(ctx context.Context, p *domain.Principal, key string) error {
-	if !canManage(p, key) {
-		return apperr.Forbidden("forbidden", "only owners of the service and administrators revoke its token")
+// RevokeToken revokes the installation token; without one it does nothing.
+func (s *Service) RevokeToken(ctx context.Context, p *domain.Principal) error {
+	if err := requireGlobal(p); err != nil {
+		return err
 	}
 	return postgres.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		svc, err := s.service(ctx, tx, key)
-		if err != nil {
-			return err
-		}
 		var prefix string
-		err = tx.QueryRow(ctx, `UPDATE service_tokens SET revoked_at = now() WHERE service_id = $1 AND revoked_at IS NULL RETURNING prefix`, svc.ID).Scan(&prefix)
+		err := tx.QueryRow(ctx, `UPDATE ci_tokens SET revoked_at = now() WHERE revoked_at IS NULL RETURNING prefix`).Scan(&prefix)
 		if postgres.IsNoRows(err) {
 			return nil
 		}
 		if err != nil {
 			return err
 		}
-		return cycledata.New(tx).AddActivity(ctx, "service", svc.ID, "ci_token_revoked", &p.UserID, false, map[string]any{"prefix": prefix})
+		return audit(ctx, p.UserID, "ci_token_revoked", prefix)
 	})
 }
 
-// tokenOwner is the service of a token presented by CI.
-type tokenOwner struct {
+// audit records the issue, the reissue and the revocation with the user (arch §6): the rows of ci_tokens keep
+// who issued a token and when it was revoked, the log keeps who did what.
+func audit(ctx context.Context, user uuid.UUID, action, prefix string) error {
+	slog.InfoContext(ctx, "ci token", "action", action, "user", user, "prefix", prefix)
+	return nil
+}
+
+// installation is the installation token presented by CI.
+type installation struct {
 	id         uuid.UUID
-	serviceID  uuid.UUID
-	serviceKey string
 	revoked    bool
 	lastUsedAt *time.Time
 }
 
-func lookupToken(ctx context.Context, pool *pgxpool.Pool, token string) (*tokenOwner, error) {
-	var o tokenOwner
+func lookupToken(ctx context.Context, pool *pgxpool.Pool, token string) (*installation, error) {
+	var o installation
 	var revokedAt *time.Time
-	err := pool.QueryRow(ctx, `SELECT t.id, t.service_id, s.key, t.revoked_at, t.last_used_at
-		FROM service_tokens t JOIN services s ON s.id = t.service_id WHERE t.token_hash = $1`, hashToken(token)).
-		Scan(&o.id, &o.serviceID, &o.serviceKey, &revokedAt, &o.lastUsedAt)
+	err := pool.QueryRow(ctx, `SELECT id, revoked_at, last_used_at FROM ci_tokens WHERE token_hash = $1`, hashToken(token)).
+		Scan(&o.id, &revokedAt, &o.lastUsedAt)
 	if postgres.IsNoRows(err) {
 		return nil, nil
 	}

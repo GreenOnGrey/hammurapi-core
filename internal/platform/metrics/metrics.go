@@ -129,8 +129,8 @@ var (
 	}, []string{"stage"})
 	// FTR.HMR.SPEC-0002 arch §7: the check of speclint in CI of repositories.
 	CITestCaseRequests = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "hammurapi_ci_test_cases_requests_total", Help: "Requests of CI for the test cases of a service by result (ok, unauthorized, revoked, not_found, rate_limited, error).",
-	}, []string{"result"})
+		Name: "hammurapi_ci_test_cases_requests_total", Help: "Requests of CI for the test cases of a service by result (ok, unauthorized, revoked, forbidden, not_found, rate_limited, error) and by the way in (oidc_github, oidc_gitlab, oidc — the keys of the issuer not reachable, installation, none).",
+	}, []string{"result", "auth"})
 	CIChecks = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "hammurapi_ci_checks", Help: "Repositories by the status of their check of speclint (target: spec, service).",
 	}, []string{"target", "status"})

@@ -14,27 +14,28 @@ import (
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/metrics"
 )
 
-// Routes mounts the token of a service (tech §3.2) and the status of the check (tech §3.3) for a session.
+// Routes mounts the installation token and the status of the check (FTR.HMR.SPEC-0002 tech §3.3) for a session.
 func (s *Service) Routes(r chi.Router) {
 	key := func(r *http.Request) string { return chi.URLParam(r, "service") }
-	r.Get("/services/{service}/token", httpx.Handler(func(w http.ResponseWriter, r *http.Request) error {
+	// the installation token for CI without OIDC (FTR.HMR.SPEC-0003 tech §3.2): the global administrators
+	r.Get("/ci-token", httpx.Handler(func(w http.ResponseWriter, r *http.Request) error {
 		p, err := httpx.MustPrincipal(r)
 		if err != nil {
 			return err
 		}
-		t, err := s.Token(r.Context(), p, key(r))
+		t, err := s.Token(r.Context(), p)
 		if err != nil {
 			return err
 		}
 		httpx.JSON(w, http.StatusOK, t)
 		return nil
 	}))
-	r.Post("/services/{service}/token", httpx.Handler(func(w http.ResponseWriter, r *http.Request) error {
+	r.Post("/ci-token", httpx.Handler(func(w http.ResponseWriter, r *http.Request) error {
 		p, err := httpx.MustPrincipal(r)
 		if err != nil {
 			return err
 		}
-		t, err := s.IssueToken(r.Context(), p, key(r))
+		t, err := s.IssueToken(r.Context(), p)
 		if err != nil {
 			return err
 		}
@@ -42,12 +43,12 @@ func (s *Service) Routes(r chi.Router) {
 		httpx.JSON(w, http.StatusCreated, t)
 		return nil
 	}))
-	r.Delete("/services/{service}/token", httpx.Handler(func(w http.ResponseWriter, r *http.Request) error {
+	r.Delete("/ci-token", httpx.Handler(func(w http.ResponseWriter, r *http.Request) error {
 		p, err := httpx.MustPrincipal(r)
 		if err != nil {
 			return err
 		}
-		if err := s.RevokeToken(r.Context(), p, key(r)); err != nil {
+		if err := s.RevokeToken(r.Context(), p); err != nil {
 			return err
 		}
 		httpx.NoContent(w)

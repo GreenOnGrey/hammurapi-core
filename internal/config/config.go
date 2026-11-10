@@ -55,6 +55,12 @@ type Config struct {
 	GitLabSecret     string
 	WebhookSecret    string
 	GitLabBotToken   string
+	// GitLabOIDCIssuer is the issuer of the OIDC tokens of GitLab CI jobs (FTR.HMR.SPEC-0003): the external
+	// address of GitLab; defaults to GitOAuthURL.
+	GitLabOIDCIssuer string
+	// GitHubOIDCIssuer is the issuer of the OIDC tokens of GitHub Actions: github.com by default, the
+	// <host>/_services/token of GitHub Enterprise Server.
+	GitHubOIDCIssuer string
 	BotLogin         string // provider login of the bot (agent PRs, own review replies)
 	CIResultsSecret  []string
 
@@ -177,6 +183,8 @@ func Load() (*Config, error) {
 		GitLabSecret:            env("GITLAB_CLIENT_SECRET", ""),
 		WebhookSecret:           env("WEBHOOK_SECRET", ""),
 		GitLabBotToken:          env("GITLAB_BOT_TOKEN", ""),
+		GitLabOIDCIssuer:        strings.TrimRight(env("GITLAB_OIDC_ISSUER", ""), "/"),
+		GitHubOIDCIssuer:        strings.TrimRight(env("GITHUB_OIDC_ISSUER", "https://token.actions.githubusercontent.com"), "/"),
 		BotLogin:                env("HAMMURAPI_BOT_LOGIN", ""),
 		CIResultsSecret:         splitList(env("CI_RESULTS_SECRET", ""), ","),
 		BootstrapAdmins:         splitList(env("BOOTSTRAP_ADMINS", ""), ","),
@@ -297,6 +305,9 @@ func Load() (*Config, error) {
 	}
 	if c.GitOAuthURL == "" {
 		c.GitOAuthURL = c.GitBaseURL
+	}
+	if c.GitLabOIDCIssuer == "" {
+		c.GitLabOIDCIssuer = c.GitOAuthURL
 	}
 	c.InternalURL = strings.TrimRight(env("INTERNAL_URL", "http://"+localAddr(c.InternalAddr)), "/")
 	c.WorkerMCPURL = strings.TrimRight(env("WORKER_MCP_URL", "http://"+localAddr(c.WorkerMCPAddr)), "/")
