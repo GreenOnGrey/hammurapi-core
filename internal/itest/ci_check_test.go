@@ -70,7 +70,7 @@ func (c *ciRepos) provider(t *testing.T, repo string) *mocks.MockProvider {
 			c.mu.Lock()
 			defer c.mu.Unlock()
 			if c.forbidden {
-				return "", &git.APIError{Provider: c.name, Status: 403, Message: "Resource not accessible by integration"}
+				return "", &git.APIError{Provider: c.name, Status: 403, Message: "refusing to allow a GitHub App to create or update workflow without `workflows` permission"}
 			}
 			for _, ch := range changes {
 				c.files[repo][branch][ch.Path] = string(ch.Content)

@@ -495,7 +495,9 @@ func providerError(provider string, err error) error {
 	var ae *git.APIError
 	if errors.As(err, &ae) && ae.Status == http.StatusForbidden {
 		e := apperr.Forbidden("provider_forbidden", ae.Message)
-		if provider == "github" {
+		// GitHub names the missing permission: "refusing to allow a GitHub App to create or update workflow … without
+		// `workflows` permission"; another 403 is the rights of the user in the repository
+		if provider == "github" && strings.Contains(strings.ToLower(ae.Message), "workflow") {
 			e = e.With("missing", "workflows")
 		}
 		return e

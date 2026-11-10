@@ -76,8 +76,13 @@ func TestBearer(t *testing.T) {
 // FTR.HMR.SPEC-0002 arch §3.7: a GitHub App without Workflows: write.
 func TestProviderError(t *testing.T) {
 	var ae *apperr.Error
-	err := providerError("github", &git.APIError{Provider: "github", Status: 403, Message: "Resource not accessible by integration"})
-	if !errors.As(err, &ae) || ae.Code != "provider_forbidden" || ae.Status != 403 {
+	err := providerError("github", &git.APIError{Provider: "github", Status: 403,
+		Message: "refusing to allow a GitHub App to create or update workflow `.github/workflows/speclint.yml` without `workflows` permission"})
+	if !errors.As(err, &ae) || ae.Code != "provider_forbidden" || ae.Status != 403 || ae.Details["missing"] != "workflows" {
+		t.Fatalf("got %v", err)
+	}
+	// the rights of the user: no permission of the app is named
+	if err := providerError("github", &git.APIError{Provider: "github", Status: 403, Message: "Resource not accessible by integration"}); !errors.As(err, &ae) || ae.Details["missing"] != nil {
 		t.Fatalf("got %v", err)
 	}
 	if err := providerError("gitlab", &git.APIError{Provider: "gitlab", Status: 422, Message: "x"}); !errors.As(err, &ae) || ae.Code != "provider_refused" {
