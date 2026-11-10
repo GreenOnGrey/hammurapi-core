@@ -55,12 +55,14 @@ type FeaturePreview struct {
 
 // RulePreview is the plan for a rules file of the archive.
 type RulePreview struct {
-	Area   string  `json:"area"`
-	File   string  `json:"file"`
-	Action string  `json:"action"` // propose | skip
-	Reason string  `json:"reason,omitempty"`
-	Result *string `json:"result,omitempty"`
-	PRURL  *string `json:"prUrl,omitempty"`
+	Area   string `json:"area"`
+	File   string `json:"file"`
+	Action string `json:"action"` // propose | skip
+	Reason string `json:"reason,omitempty"`
+	// Violations of the document contract when Reason is rules_contract (FTR.HMR.DEV-0003 R19).
+	Violations []rules.Violation `json:"violations,omitempty"`
+	Result     *string           `json:"result,omitempty"`
+	PRURL      *string           `json:"prUrl,omitempty"`
 }
 
 // Preview is stored in imports.preview.
@@ -289,6 +291,9 @@ func (s *Service) validate(ctx context.Context, p *domain.Principal, arc *Archiv
 			rp.Reason = "unknown_file"
 		case !rules.CanChange(p, area):
 			rp.Reason = "not_area_admin"
+		case len(rules.TemplateViolations(area, strings.TrimSuffix(r.File, ".md"), string(r.Content))) > 0:
+			rp.Reason = "rules_contract" // FTR.HMR.DEV-0003 R19: the template breaks the document contract
+			rp.Violations = rules.TemplateViolations(area, strings.TrimSuffix(r.File, ".md"), string(r.Content))
 		default:
 			rp.Action = "propose"
 		}

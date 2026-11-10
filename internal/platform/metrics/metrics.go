@@ -123,6 +123,10 @@ var (
 	SpecChangeNotes = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "hammurapi_spec_change_notes_total", Help: "Notes in changed features by result (applied, rejected, conflict_reapplied).",
 	}, []string{"result"})
+	// RulesContractRejections counts templates refused by the document contract (FTR.HMR.DEV-0003 arch §7).
+	RulesContractRejections = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "hammurapi_rules_contract_rejections_total", Help: "Rules templates refused by the document contract by stage (propose, approve).",
+	}, []string{"stage"})
 	SpecRequests = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "hammurapi_spec_requests_total", Help: "Instructions to the writer by the state they reached (queued, running, done, failed).",
 	}, []string{"state"})
@@ -149,7 +153,7 @@ func init() {
 		SpecScanRuns, SpecScanDuration, SpecIndexIssuesOpen, SpecDocuments, SpecIndexedFeatures,
 		WorkflowRuns, WorkflowTransitionDuration, WorkflowBlocked, EffectsFailed, CodeTaskStates, CodeTaskDuration,
 		CodeTokens, DeployRuns, ReleaseRollbacks,
-		SpecRuns, SpecRunDuration, SpecRequests, SpecChangeNotes, FeatureTopicsCreated, DiscoveryRequests, DiscoveryRequestDuration, NabuNotices, IssueTopicsCreated, IssueTopicsArchived, DiscoveryQuestionsDropped,
+		SpecRuns, SpecRunDuration, SpecRequests, SpecChangeNotes, RulesContractRejections, FeatureTopicsCreated, DiscoveryRequests, DiscoveryRequestDuration, NabuNotices, IssueTopicsCreated, IssueTopicsArchived, DiscoveryQuestionsDropped,
 	)
 }
 

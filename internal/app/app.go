@@ -369,6 +369,7 @@ func RunAPI(ctx context.Context, cfg *config.Config) error {
 	adminSvc := admin.NewService(c.pool).WithIdentities(c.authRepo)
 	nabuSvc := c.nabuService()
 	rulesSvc := rules.NewService(c.pool, c.provider, tokens, branch)
+	rulesSvc.Lang = contract.Lang(cfg.SpecLanguage)
 	attSvc := attachments.NewService(c.pool, c.s3, cfg.UploadMaxBytes, cfg.UploadAllowedTypes)
 	importSvc := imports.NewService(c.pool, c.store, c.s3, producer, c.provider, tokens, c.events, rulesSvc, loadPrincipal, imports.Config{
 		MaxBytes: cfg.ImportMaxBytes, DefaultBranch: branch, AllowedAssets: cfg.ImportAllowedAssetTypes,
@@ -534,6 +535,7 @@ func RunWorker(ctx context.Context, cfg *config.Config) error {
 	loadPrincipal := principalLoader(c.authRepo)
 	sl := c.slices()
 	rulesSvc := rules.NewService(c.pool, c.provider, tokens, cfg.GitDefaultBranch)
+	rulesSvc.Lang = contract.Lang(cfg.SpecLanguage)
 	importSvc := imports.NewService(c.pool, c.store, c.s3, producer, c.provider, tokens, c.events, rulesSvc, loadPrincipal, imports.Config{
 		MaxBytes: cfg.ImportMaxBytes, DefaultBranch: cfg.GitDefaultBranch, AllowedAssets: cfg.ImportAllowedAssetTypes,
 		Limits: imports.Limits{MaxUncompressed: cfg.ImportMaxUncompressedBytes, MaxFiles: cfg.ImportMaxFiles},
@@ -543,7 +545,14 @@ func RunWorker(ctx context.Context, cfg *config.Config) error {
 	// Agent sessions of the worker (Analysis, generation, checks, code) are runs
 	// of the service agents of Nabu; they reach the worker's own MCP endpoint
 	// (result sinks, FTR.HMR.CMN-0007 R4).
-	proc.Specs = sl.spec // pushes to the default branch update the specification index
+	proc.Specs = sl.spec  // pushes to the default branch update the specification index
+	proc.Rules = rulesSvc // FTR.HMR.DEV-0003 R20: pushes to rules/ check the templates
+	// R20, R24: the templates of the default branch are checked at the start; an empty repository gets the starter rules
+	go func() {
+		if err := rulesSvc.Start(ctx); err != nil && ctx.Err() == nil {
+			slog.WarnContext(ctx, "rules contract check at start", "err", err)
+		}
+	}()
 	mcpServer := mcp.NewServer()
 	mcpServer.Register(sl.spec.Tools()...)
 	mcpServer.Register(agent.Tools(c.toolDeps(sl, loadPrincipal))...)
@@ -570,7 +579,7 @@ func RunWorker(ctx context.Context, cfg *config.Config) error {
 	specNotices := &gategen.NoticeEffects{Q: c.pool, Email: c.authRepo.UserEmail, Nabu: ns.Client}
 	engine.Handle(gategen.EffectNotice, workflows.EffectHandler{Do: specNotices.Do})
 	gen := &gategen.Effects{Store: c.store, Git: c.provider, Tokens: tokens, Runner: agents, DefaultBranch: cfg.GitDefaultBranch, Timeout: cfg.WriterTimeout,
-		Changes: sl.changes}
+		Changes: sl.changes, Lang: contract.Lang(cfg.SpecLanguage)}
 	engine.Handle(gategen.Effect, workflows.EffectHandler{Lease: cfg.WriterTimeout + time.Minute, Do: gen.Do})
 	engine.Handle(gategen.EffectTrace, workflows.EffectHandler{Do: gen.DoTrace})
 	engine.Handle(gategen.EffectDrain, workflows.EffectHandler{Do: (&gategen.DrainEffects{Q: c.pool}).Do})
