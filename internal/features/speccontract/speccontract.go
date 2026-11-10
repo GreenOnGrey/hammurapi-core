@@ -19,6 +19,7 @@ import (
 	"github.com/GreenOnGrey/hammurapi-core/internal/apperr"
 	"github.com/GreenOnGrey/hammurapi-core/internal/domain"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/git"
+	"github.com/GreenOnGrey/hammurapi-core/internal/platform/metrics"
 	"github.com/GreenOnGrey/hammurapi-core/internal/specdata"
 )
 
@@ -108,6 +109,9 @@ func (c *Checker) Check(ctx context.Context, token string, f *specdata.Feature, 
 	}
 	if len(out) == 0 {
 		return nil
+	}
+	for _, v := range out {
+		metrics.SpecContractRejections.WithLabelValues(string(area), v.Check).Inc()
 	}
 	return apperr.Unprocessable("spec_contract", violationsMessage(out)).With("violations", out)
 }
