@@ -9,7 +9,7 @@ import (
 	"path"
 	"strings"
 
-	"github.com/GreenOnGrey/speclint/contract"
+	"github.com/GreenOnGrey/speclint/v2/contract"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/postgres"
@@ -177,6 +177,17 @@ func writeFile(ctx context.Context, q postgres.Querier, loc Loc, p, sha string, 
 
 // MimeOf is the media type by extension; unknown types are downloads.
 func MimeOf(p string) string {
+	// the contract files of tech (FTR.HMR.SPEC-0004 tech §2.2)
+	if _, format, ok := contract.ContractFile(path.Base(p)); ok {
+		switch format {
+		case contract.FormatOpenAPIJSON:
+			return MimeOpenAPIJSON
+		case contract.FormatOpenAPIYAML:
+			return MimeOpenAPIYAML
+		case contract.FormatProto:
+			return MimeProto
+		}
+	}
 	ext := strings.ToLower(path.Ext(p))
 	switch ext {
 	case ".md":
@@ -193,6 +204,18 @@ func MimeOf(p string) string {
 		return t
 	}
 	return "application/octet-stream"
+}
+
+// The types of the contract files: the viewer shows them as API (FTR.HMR.SPEC-0004 R7).
+const (
+	MimeOpenAPIJSON = "application/vnd.oai.openapi+json"
+	MimeOpenAPIYAML = "application/vnd.oai.openapi"
+	MimeProto       = "text/x-protobuf"
+)
+
+// IsContract tells whether a type is of a contract file.
+func IsContract(mt string) bool {
+	return mt == MimeOpenAPIJSON || mt == MimeOpenAPIYAML || mt == MimeProto
 }
 
 // writeItems stores the requirements R<n> of product or the decisions A<n> of

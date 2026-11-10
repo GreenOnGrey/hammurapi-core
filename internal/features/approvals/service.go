@@ -15,6 +15,7 @@ import (
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/features"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/gates"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/specchanges"
+	"github.com/GreenOnGrey/hammurapi-core/internal/features/speccontract"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/events"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/git"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/httpx"
@@ -49,6 +50,9 @@ type Service struct {
 	gen    gates.Generator
 	// Changes aligns the notes of the product document before it is submitted (FTR.HMR.DEV-0002 R6); nil — none.
 	Changes *specchanges.Service
+	// Contract refuses arch and tech that break the services, the C4 diagram or the contract files
+	// (FTR.HMR.SPEC-0004 tech §3.1); nil — no check.
+	Contract *speccontract.Checker
 }
 
 // NewService creates the service.
@@ -118,6 +122,16 @@ func (s *Service) Submit(ctx context.Context, p *domain.Principal, uniqueID stri
 				return nil, apperr.Conflict("decisions_without_id", "some decisions have no number A<n>; ask the agent to number them or submit anyway").
 					With("decisions", u)
 			}
+		}
+	}
+	// FTR.HMR.SPEC-0004: 422 spec_contract, whatever force says: force only accepts the items without numbers
+	if s.Contract != nil && (area == domain.AreaArch || area == domain.AreaTech) {
+		token, err := s.tokens.Token(ctx, p.UserID)
+		if err != nil {
+			return nil, err
+		}
+		if err := s.Contract.Check(ctx, token, f, area); err != nil {
+			return nil, auth.MapGitError(err)
 		}
 	}
 	var changesToken string

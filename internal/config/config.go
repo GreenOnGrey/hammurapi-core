@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/GreenOnGrey/speclint/contract"
+	"github.com/GreenOnGrey/speclint/v2/contract"
 )
 
 // Config holds every deployment-level parameter of a Hammurapi instance.

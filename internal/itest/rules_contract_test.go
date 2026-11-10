@@ -9,8 +9,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/GreenOnGrey/speclint/contract"
-	"github.com/GreenOnGrey/speclint/starter"
+	"github.com/GreenOnGrey/speclint/v2/contract"
+	"github.com/GreenOnGrey/speclint/v2/starter"
 	"go.uber.org/mock/gomock"
 
 	"github.com/GreenOnGrey/hammurapi-core/internal/apperr"
@@ -178,10 +178,10 @@ func TestRulesContract(t *testing.T) {
 		t.Fatal("a push that deleted rules/ was undone by the bot")
 	}
 
-	// CTR-04: the description of the contract of arch.
+	// CTR-04: the description of the contract of arch, with the services and the C4 diagram (FTR.HMR.SPEC-0004 R1, R4).
 	d, err := svc.Describe(tu.User("admin:arch"), domain.AreaArch)
 	must(t, err)
-	if d["lang"] != contract.EN || len(d["template"].([]contract.Element)) != 3 || len(d["fixTemplate"].([]contract.Element)) != 2 {
+	if d["lang"] != contract.EN || len(d["template"].([]contract.Element)) != 5 || len(d["fixTemplate"].([]contract.Element)) != 2 {
 		t.Fatalf("describe %+v", d)
 	}
 }

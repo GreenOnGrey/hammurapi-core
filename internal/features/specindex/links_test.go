@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/GreenOnGrey/speclint/contract"
+	"github.com/GreenOnGrey/speclint/v2/contract"
 )
 
 // LINK-01: «Опирается на» with three keys and explanations in parentheses gives three "extends".

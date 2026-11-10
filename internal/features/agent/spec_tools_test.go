@@ -80,6 +80,33 @@ func TestCheckFile(t *testing.T) {
 	}
 }
 
+// FTR.HMR.SPEC-0004 R8 (GEN-01): the writer submits the contract of a service for tech, in its format.
+func TestCheckContractFile(t *testing.T) {
+	w := &mcp.WriterScope{Mode: "generate", Areas: []domain.Area{domain.AreaTech}}
+	for _, in := range []map[string]any{
+		{"area": "tech", "path": "booking.openapi.yaml", "content": "openapi: 3.0.3\npaths: {}\n"},
+		{"area": "tech", "path": "booking.proto", "content": "syntax = \"proto3\";\nservice Booking {}\n"},
+	} {
+		if got := CheckFile(w, raw(t, in)); got != "" {
+			t.Errorf("%v: %q", in["path"], got)
+		}
+	}
+	for i, in := range []map[string]any{
+		{"area": "tech", "path": "booking.html", "content": "<p>"},
+		{"area": "tech", "path": "../booking.proto", "content": "syntax = \"proto3\";\nmessage A {}\n"},
+		{"area": "tech", "path": "booking.proto", "content": "message A {}\n"},
+		{"area": "tech", "path": "booking.openapi.yaml", "content": "swagger: \"2.0\"\npaths: {}\n"},
+	} {
+		if CheckFile(w, raw(t, in)) == "" {
+			t.Errorf("case %d accepted", i)
+		}
+	}
+	design := &mcp.WriterScope{Mode: "generate", Areas: []domain.Area{domain.AreaDesign}}
+	if CheckFile(design, raw(t, map[string]any{"area": "tech", "path": "booking.proto", "content": "syntax = \"proto3\";\nmessage A {}\n"})) == "" {
+		t.Error("a contract outside the areas of the run")
+	}
+}
+
 // RQ-05: the old way to change a specification is gone; R32: no names of skills.
 func TestSpecTools(t *testing.T) {
 	names := map[string]bool{}

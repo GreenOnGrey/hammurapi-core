@@ -7,7 +7,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/GreenOnGrey/speclint/contract"
+	"github.com/GreenOnGrey/speclint/v2/contract"
 	"github.com/go-chi/chi/v5"
 
 	"github.com/GreenOnGrey/hammurapi-core/internal/apperr"

@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/GreenOnGrey/speclint/contract"
+	"github.com/GreenOnGrey/speclint/v2/contract"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 

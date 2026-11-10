@@ -9,8 +9,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/GreenOnGrey/speclint/contract"
-	"github.com/GreenOnGrey/speclint/starter"
+	"github.com/GreenOnGrey/speclint/v2/contract"
+	"github.com/GreenOnGrey/speclint/v2/starter"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 

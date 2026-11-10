@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/GreenOnGrey/speclint/contract"
+	"github.com/GreenOnGrey/speclint/v2/contract"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
@@ -26,6 +26,7 @@ import (
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/features"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/gates"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/specchanges"
+	"github.com/GreenOnGrey/hammurapi-core/internal/features/speccontract"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/trace"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/usage"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/workflows"
@@ -730,6 +731,7 @@ type submittedFile struct {
 // PromptData is what the writer reads.
 type PromptData struct {
 	Docs      map[domain.Area]string
+	Contracts map[string]string // the contract files next to tech: name → content (FTR.HMR.SPEC-0004 R8)
 	Templates map[domain.Area]string
 	Services  []cycledata.Service
 	Discovery []IssueDiscovery
@@ -791,6 +793,7 @@ func Prompt(f *specdata.Feature, req Request, d PromptData) string {
 			fmt.Fprintf(&b, "\n=== %s/spec.md ===\n%s\n", a, doc)
 		}
 	}
+	speccontract.WriteContracts(&b, d.Contracts, "\n=== tech/%s ===\n")
 	if len(d.Requests) > 0 {
 		b.WriteString("\n=== Instructions of this run ===\nAnswers and instructions of experts are decisions.\n")
 		for _, r := range d.Requests {
@@ -854,6 +857,7 @@ Changes to other features (FTR.HMR.DEV-0002 R1–R3): if product changes behavio
 Changes of architecture (FTR.HMR.DEV-0003 R12, R13): if arch changes architecture decisions A<n> of other features of the default branch, list them in the section of changes of arch (see the document contract of arch): one decision A<n> per row. Find them with spec_search, spec_read, spec_requirements with kind decision, spec_references and spec_links. Unsure whether a decision is changed or only extended: ask a question with a recommendation. Arch changes only decisions A<n>; a change of behaviour goes to the section of product.
 Carry answers and decisions to the section "Принятые решения" with the reason. Do not write the section "Открытые вопросы" and remove it if the document has it: the server adds it when the gate is submitted with open questions. Remove the hints of the template from the document.
 design also has a mockup: call submit_gate_file with mockups.html: a single self-contained page of the screens, light and dark theme, color-scheme declared in each, no network dependencies except fonts.
+tech may have the contract of a service (FTR.HMR.SPEC-0004 R6, R8): when a brief asks for it, or the API or the messages of a service are its main change, call submit_gate_file with area tech and <service key>.openapi.yaml (OpenAPI 3) or <service key>.proto (proto3), for a service of the table of arch; name the file in the section API of the document. An existing contract is shown below next to the documents; a change resubmits it whole.
 A gate that is not needed (only design and arch): submit_gate without content with one question whose skipArea is this area, with why. The experts decide.
 `
 
@@ -1045,11 +1049,12 @@ func documentChanges(f *specdata.Feature, areas []domain.Area, results map[domai
 	var changes []git.FileChange
 	for _, a := range areas {
 		s, ok := results[a]
-		if !ok || s.Unchanged || strings.TrimSpace(s.Content) == "" {
-			continue
+		if ok && !s.Unchanged && strings.TrimSpace(s.Content) != "" {
+			written = append(written, a)
+			changes = append(changes, git.FileChange{Path: git.SpecPath(f.DomainKey, f.SystemKey, f.UniqueID, string(a)), Content: []byte(s.Content)})
+		} else if len(files[a]) > 0 {
+			written = append(written, a) // a contract corrected without its document (FTR.HMR.SPEC-0004 R8)
 		}
-		written = append(written, a)
-		changes = append(changes, git.FileChange{Path: git.SpecPath(f.DomainKey, f.SystemKey, f.UniqueID, string(a)), Content: []byte(s.Content)})
 		for _, x := range files[a] {
 			changes = append(changes, git.FileChange{Path: git.SpecDir(f.DomainKey, f.SystemKey, f.UniqueID, string(a)) + "/" + x.Path, Content: []byte(x.Content)})
 		}
@@ -1082,6 +1087,11 @@ func (e *Effects) session(ctx context.Context, run workflows.RunRef, f *specdata
 		if err == nil {
 			d.Docs[a] = string(file.Content)
 		} else if !errors.Is(err, git.ErrNotFound) {
+			return nil, nil, err
+		}
+	}
+	if _, ok := d.Docs[domain.AreaTech]; ok {
+		if d.Contracts, err = speccontract.Contracts(ctx, e.Git, token, f, "", 2<<20); err != nil { // 2 MiB: the limit of a file of the writer
 			return nil, nil, err
 		}
 	}

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/GreenOnGrey/speclint/contract"
+	"github.com/GreenOnGrey/speclint/v2/contract"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -54,6 +54,7 @@ import (
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/rules"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/services"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/specchanges"
+	"github.com/GreenOnGrey/hammurapi-core/internal/features/speccontract"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/specindex"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/usage"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/validation"
@@ -380,6 +381,7 @@ func RunAPI(ctx context.Context, cfg *config.Config) error {
 
 	approvalSvc := approvals.NewService(c.store, approvals.NewRepository(c.pool), c.provider, tokens, c.events, gategen.Generator{Q: c.pool})
 	approvalSvc.Changes = sl.changes
+	approvalSvc.Contract = &speccontract.Checker{Git: c.provider, Pool: c.pool, MaxBytes: cfg.SpecFilePreviewMaxBytes}
 	domainSvc := domains.NewService(c.pool, c.events)
 	domainSvc.CatalogChanged = sl.spec.RequestCatalog // R6: a new domain or system triggers a check
 	profileSvc := profile.NewService(c.pool)

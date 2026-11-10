@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/GreenOnGrey/speclint/contract"
+	"github.com/GreenOnGrey/speclint/v2/contract"
 
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/markdown"
 )

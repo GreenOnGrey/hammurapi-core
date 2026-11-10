@@ -544,7 +544,7 @@ func touchesTrace(c git.PushCommit) bool {
 	for _, list := range [][]string{c.Added, c.Modified, c.Removed} {
 		for _, x := range list {
 			if loc, ok := git.ParseSpecPath(x); ok && loc.Rest == "spec.md" &&
-				(loc.Area == string(domain.AreaProduct) || loc.Area == string(domain.AreaTech) || loc.Area == string(domain.AreaQA)) {
+				(loc.Area == string(domain.AreaProduct) || loc.Area == string(domain.AreaArch) || loc.Area == string(domain.AreaTech) || loc.Area == string(domain.AreaQA)) {
 				return true
 			}
 		}

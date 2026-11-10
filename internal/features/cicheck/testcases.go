@@ -13,12 +13,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/GreenOnGrey/speclint/contract"
+	"github.com/GreenOnGrey/speclint/v2/contract"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/GreenOnGrey/hammurapi-core/internal/apperr"
 	"github.com/GreenOnGrey/hammurapi-core/internal/cycledata"
+	"github.com/GreenOnGrey/hammurapi-core/internal/features/speccontract"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/httpx"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/metrics"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/postgres"
@@ -176,6 +177,11 @@ func (s *Service) CIRoutes(r chi.Router) {
 		metrics.CITestCaseRequests.WithLabelValues(res, auth).Inc()
 		return err
 	}))
+	r.Get("/ci/services", httpx.Handler(func(w http.ResponseWriter, r *http.Request) error {
+		res, auth, err := s.serveServices(w, r)
+		metrics.CIServicesRequests.WithLabelValues(res, auth).Inc()
+		return err
+	}))
 }
 
 // repoService is a service of the catalog with its repository.
@@ -218,30 +224,36 @@ func clientIP(r *http.Request) string {
 	return host
 }
 
-func (s *Service) serveTestCases(w http.ResponseWriter, r *http.Request) (result, auth string, err error) {
+// caller is who presents a token of CI: the installation, or the repository of an OIDC token.
+type caller struct {
+	installation bool
+	repository   string
+}
+
+// authCI checks the token of a request of CI (FTR.HMR.SPEC-0003 tech §2): the installation token or the OIDC token
+// of a job; result and auth are the labels of the metric.
+func (s *Service) authCI(w http.ResponseWriter, r *http.Request) (c *caller, result, auth string, err error) {
 	ctx := r.Context()
 	auth = "none"
-	limited := func(wait time.Duration, msg string) (string, string, error) {
+	limited := func(wait time.Duration, msg string) (*caller, string, string, error) {
 		w.Header().Set("Retry-After", strconv.Itoa(int(wait.Seconds())+1))
-		return "rate_limited", auth, apperr.New(http.StatusTooManyRequests, "rate_limited", msg)
+		return nil, "rate_limited", auth, apperr.New(http.StatusTooManyRequests, "rate_limited", msg)
 	}
 	// failed attempts are limited by the address: a guess of tokens costs a query or a signature each
-	failed := func(msg string) (string, string, error) {
+	failed := func(msg string) (*caller, string, string, error) {
 		if ok, wait := s.failures.allow(clientIP(r)); !ok {
 			return limited(wait, "too many requests with tokens that are not accepted")
 		}
-		return "unauthorized", auth, apperr.Unauthorized("token_invalid", msg)
+		return nil, "unauthorized", auth, apperr.Unauthorized("token_invalid", msg)
 	}
 	if ok, _ := s.failures.peek(clientIP(r)); !ok {
 		return failed("too many requests with tokens that are not accepted")
 	}
-	key := chi.URLParam(r, "service")
 	if t := rawBearer(r); strings.HasPrefix(t, "hmr_svc_") { // a file of 1.1.0: no guess, no count against the address
-		return "unauthorized", auth, apperr.Unauthorized("token_invalid",
+		return nil, "unauthorized", auth, apperr.Unauthorized("token_invalid",
 			"tokens of services are gone: the job presents the OIDC token of its CI; replace the file of the check (FTR.HMR.SPEC-0003)")
 	}
 	token := bearer(r)
-	var svcID uuid.UUID
 	switch {
 	case token == "":
 		return failed("no token: the OIDC token of the CI job or the installation token")
@@ -250,11 +262,11 @@ func (s *Service) serveTestCases(w http.ResponseWriter, r *http.Request) (result
 		o, err := lookupToken(ctx, s.pool, token)
 		switch {
 		case err != nil:
-			return "error", auth, err
+			return nil, "error", auth, err
 		case o == nil:
 			return failed("unknown installation token")
 		case o.revoked:
-			return "revoked", auth, apperr.Unauthorized("token_revoked", "the installation token is revoked")
+			return nil, "revoked", auth, apperr.Unauthorized("token_revoked", "the installation token is revoked")
 		}
 		if ok, wait := s.limits.allow("installation:" + o.id.String()); !ok {
 			return limited(wait, "at most 60 requests a minute per token")
@@ -262,6 +274,36 @@ func (s *Service) serveTestCases(w http.ResponseWriter, r *http.Request) (result
 		if o.lastUsedAt == nil || time.Since(*o.lastUsedAt) > time.Minute {
 			_, _ = s.pool.Exec(context.WithoutCancel(ctx), `UPDATE ci_tokens SET last_used_at = now() WHERE id = $1`, o.id)
 		}
+		return &caller{installation: true}, "", auth, nil
+	default:
+		auth = "oidc"
+		if s.OIDC == nil {
+			return failed("OIDC tokens of CI are not configured")
+		}
+		id, err := s.OIDC.Verify(ctx, token)
+		if err != nil {
+			if errors.Is(err, errToken) {
+				return failed(err.Error())
+			}
+			return nil, "error", auth, err // the keys of the issuer are not reachable: not the fault of the token
+		}
+		auth = "oidc_" + id.Provider
+		if ok, wait := s.limits.allow("repo:" + strings.ToLower(id.Repository)); !ok {
+			return limited(wait, "at most 60 requests a minute per repository")
+		}
+		return &caller{repository: id.Repository}, "", auth, nil
+	}
+}
+
+func (s *Service) serveTestCases(w http.ResponseWriter, r *http.Request) (result, auth string, err error) {
+	ctx := r.Context()
+	c, result, auth, err := s.authCI(w, r)
+	if c == nil {
+		return result, auth, err
+	}
+	key := chi.URLParam(r, "service")
+	var svcID uuid.UUID
+	if c.installation {
 		svc, err := s.service(ctx, s.pool, key)
 		var ae *apperr.Error
 		switch {
@@ -273,35 +315,20 @@ func (s *Service) serveTestCases(w http.ResponseWriter, r *http.Request) (result
 			return "not_found", auth, apperr.NotFound("service_not_found", "the service is deleted in the catalog")
 		}
 		svcID = svc.ID
-	default:
-		auth = "oidc"
-		if s.OIDC == nil {
-			return failed("OIDC tokens of CI are not configured")
-		}
-		id, err := s.OIDC.Verify(ctx, token)
-		if err != nil {
-			if errors.Is(err, errToken) {
-				return failed(err.Error())
-			}
-			return "error", auth, err // the keys of the issuer are not reachable: not the fault of the token
-		}
-		auth = "oidc_" + id.Provider
-		if ok, wait := s.limits.allow("repo:" + strings.ToLower(id.Repository)); !ok {
-			return limited(wait, "at most 60 requests a minute per repository")
-		}
-		services, err := s.repoServices(ctx, id.Repository)
+	} else {
+		services, err := s.repoServices(ctx, c.repository)
 		if err != nil {
 			return "error", auth, err
 		}
 		if len(services) == 0 {
-			slog.InfoContext(ctx, "ci oidc refused", "repository", id.Repository, "reason", "repo_not_in_catalog")
-			return "forbidden", auth, apperr.Forbidden("repo_not_in_catalog", fmt.Sprintf("repository %s is not the repository of any service in Hammurapi", id.Repository)).With("repository", id.Repository)
+			slog.InfoContext(ctx, "ci oidc refused", "repository", c.repository, "reason", "repo_not_in_catalog")
+			return "forbidden", auth, apperr.Forbidden("repo_not_in_catalog", fmt.Sprintf("repository %s is not the repository of any service in Hammurapi", c.repository)).With("repository", c.repository)
 		}
 		i := slices.IndexFunc(services, func(rs repoService) bool { return rs.key == key })
 		switch {
 		case i < 0: // the scope before the catalog: a token does not tell which other services exist
-			slog.InfoContext(ctx, "ci oidc refused", "repository", id.Repository, "service", key, "reason", "token_scope")
-			return "forbidden", auth, apperr.Forbidden("token_scope", fmt.Sprintf("the token is of repository %s, service %s is not in it", id.Repository, key)).With("repository", id.Repository)
+			slog.InfoContext(ctx, "ci oidc refused", "repository", c.repository, "service", key, "reason", "token_scope")
+			return "forbidden", auth, apperr.Forbidden("token_scope", fmt.Sprintf("the token is of repository %s, service %s is not in it", c.repository, key)).With("repository", c.repository)
 		case services[i].deleted:
 			return "not_found", auth, apperr.NotFound("service_not_found", "the service is deleted in the catalog")
 		}
@@ -312,5 +339,24 @@ func (s *Service) serveTestCases(w http.ResponseWriter, r *http.Request) (result
 		return "error", auth, err
 	}
 	httpx.JSON(w, http.StatusOK, out)
+	return "ok", auth, nil
+}
+
+// serveServices answers the keys of the catalog to the CI of the repository of specifications (FTR.HMR.SPEC-0004
+// tech §3.2): to the installation token, or to the OIDC token of that repository.
+func (s *Service) serveServices(w http.ResponseWriter, r *http.Request) (result, auth string, err error) {
+	c, result, auth, err := s.authCI(w, r)
+	if c == nil {
+		return result, auth, err
+	}
+	if !c.installation && !strings.EqualFold(c.repository, s.git.Repo()) {
+		slog.InfoContext(r.Context(), "ci oidc refused", "repository", c.repository, "reason", "token_scope")
+		return "forbidden", auth, apperr.Forbidden("token_scope", fmt.Sprintf("the token is of repository %s, not of the repository of specifications", c.repository)).With("repository", c.repository)
+	}
+	keys, err := speccontract.ServiceKeys(r.Context(), s.pool)
+	if err != nil {
+		return "error", auth, err
+	}
+	httpx.JSON(w, http.StatusOK, map[string][]string{"services": keys})
 	return "ok", auth, nil
 }

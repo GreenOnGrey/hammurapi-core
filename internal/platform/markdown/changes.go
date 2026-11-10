@@ -1,6 +1,6 @@
 package markdown
 
-import "github.com/GreenOnGrey/speclint/contract"
+import "github.com/GreenOnGrey/speclint/v2/contract"
 
 // FeatureKey is the pattern of a feature key: FTR.<DOMAIN>.<SYSTEM>-NNNN. The
 // sections, notes and links of documents are read by the document contract
