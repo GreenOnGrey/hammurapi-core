@@ -1,3 +1,5 @@
+github.com/GreenOnGrey/speclint/v2 v2.0.0 h1:iUaQTauFYRHXD+dWliGBKU3XaniOIkpoPjIFH5wK2lw=
+github.com/GreenOnGrey/speclint/v2 v2.0.0/go.mod h1:rPZPAj5t0bPAGmk2ujakwI0cARb1a5xpJCPK2eTI4mQ=
 github.com/Microsoft/go-winio v0.6.2 h1:F2VQgta7ecxGYO8k3ZZz3RS8fVIXVxONVUPlNERoyfY=
 github.com/Microsoft/go-winio v0.6.2/go.mod h1:yd8OoFMLzJbo9gZq8j5qaps8bJ9aShtEA8Ipt1oGCvU=
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=

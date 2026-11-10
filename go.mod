@@ -83,5 +83,3 @@ require (
 )
 
 tool go.uber.org/mock/mockgen
-
-replace github.com/GreenOnGrey/speclint/v2 => ../speclint
