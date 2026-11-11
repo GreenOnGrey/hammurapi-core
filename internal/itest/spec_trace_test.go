@@ -42,7 +42,7 @@ func TestIndexedTrace(t *testing.T) {
 	repo.set("specs/FMS/CAR/FTR.FMS.CAR-0001/qa/spec.md", qaHead+"| BOOK-01 | R1 | Бронь | Да | U |\n| BOOK-02 | R1 | Отмена | Да | U |\n")
 	repo.set(imported+"product/spec.md", "# Weekend tariffs\n\n**R1.** Тариф выходного дня.\n")
 	repo.set(imported+"tech/spec.md", "# Техспецификация\n\n## 1. Изменения по сервисам\n\n| Сервис | Что меняется | Требования |\n|---|---|---|\n| `booking` | Тариф | R1 |\n| `ghost` | Нет в каталоге | R1 |\n")
-	repo.set(imported+"qa/spec.md", qaHead+"| UI-10 | R1 | Тариф | Да | U |\n| UI-11 | R1 | Скидка | Да | U |\n")
+	repo.set(imported+"qa/spec.md", qaHead+"| WKND-10 | R1 | Тариф | Да | U |\n| WKND-11 | R1 | Скидка | Да | U |\n")
 	svc := specindex.NewService(db, repo.provider(t), nil, specindex.Config{DefaultBranch: "main"})
 	runCheck := func() {
 		t.Helper()
@@ -66,7 +66,7 @@ func TestIndexedTrace(t *testing.T) {
 	must(t, db.QueryRow(ctx, `SELECT f.phase::text, COALESCE(f.trace_source, ''),
 		COALESCE((SELECT string_agg(s.key, ',') FROM feature_services fs JOIN services s ON s.id = fs.service_id WHERE fs.feature_id = f.id), '')
 		FROM features f WHERE f.unique_id = 'FTR.FMS.CAR-0042'`).Scan(&phase, &source, &services))
-	if phase != "indexed" || source == "" || services != "booking" || casesOf("FTR.FMS.CAR-0042") != "UI-10,UI-11" {
+	if phase != "indexed" || source == "" || services != "booking" || casesOf("FTR.FMS.CAR-0042") != "WKND-10,WKND-11" {
 		t.Fatalf("indexed: phase %s source %q services %q cases %q", phase, source, services, casesOf("FTR.FMS.CAR-0042"))
 	}
 	// SVC-15: the released feature keeps the projection of its branch.
@@ -75,18 +75,18 @@ func TestIndexedTrace(t *testing.T) {
 	}
 
 	// SVC-13: without a change of the documents the projection is not written again.
-	_, err = db.Exec(ctx, `DELETE FROM test_cases WHERE tc_id = 'UI-11'`)
+	_, err = db.Exec(ctx, `DELETE FROM test_cases WHERE tc_id = 'WKND-11'`)
 	must(t, err)
 	runCheck()
-	if got := casesOf("FTR.FMS.CAR-0042"); got != "UI-10" {
+	if got := casesOf("FTR.FMS.CAR-0042"); got != "WKND-10" {
 		t.Fatalf("projected again without a change: %s", got)
 	}
 	// A new case in qa of the default branch reaches the projection.
-	repo.set(imported+"qa/spec.md", qaHead+"| UI-10 | R1 | Тариф | Да | U |\n| UI-11 | R1 | Скидка | Да | U |\n| UI-12 | R1 | Возврат | Да | I |\n")
+	repo.set(imported+"qa/spec.md", qaHead+"| WKND-10 | R1 | Тариф | Да | U |\n| WKND-11 | R1 | Скидка | Да | U |\n| WKND-12 | R1 | Возврат | Да | I |\n")
 	runCheck()
 	var source2 string
 	must(t, db.QueryRow(ctx, `SELECT trace_source FROM features WHERE unique_id = 'FTR.FMS.CAR-0042'`).Scan(&source2))
-	if got := casesOf("FTR.FMS.CAR-0042"); got != "UI-10,UI-11,UI-12" || source2 == source {
+	if got := casesOf("FTR.FMS.CAR-0042"); got != "WKND-10,WKND-11,WKND-12" || source2 == source {
 		t.Fatalf("after the change: cases %s, source %q → %q", got, source, source2)
 	}
 	// A service added to the catalog later links the feature that names it.
