@@ -269,9 +269,10 @@ func (g *GitHub) Blob(ctx context.Context, token, sha string) ([]byte, error) {
 
 // Commit creates a single commit via the git data API: blobs → tree → commit → ref.
 func (g *GitHub) Commit(ctx context.Context, token, branch, message string, changes []FileChange) (string, error) {
+	// FTR.HMR.DEV-0004 R3: every step names itself in the error.
 	head, err := g.BranchHead(ctx, token, branch)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("read the head of the branch: %w", err)
 	}
 	var parent struct {
 		Tree struct {
@@ -279,7 +280,7 @@ func (g *GitHub) Commit(ctx context.Context, token, branch, message string, chan
 		} `json:"tree"`
 	}
 	if _, err := g.api.call(ctx, "get_commit", token, http.MethodGet, g.r("/git/commits/"+head), nil, &parent); err != nil {
-		return "", err
+		return "", fmt.Errorf("read the head commit: %w", err)
 	}
 	type entry struct {
 		Path string  `json:"path"`
@@ -298,7 +299,7 @@ func (g *GitHub) Commit(ctx context.Context, token, branch, message string, chan
 		}
 		if _, err := g.api.call(ctx, "create_blob", token, http.MethodPost, g.r("/git/blobs"),
 			map[string]string{"content": base64.StdEncoding.EncodeToString(ch.Content), "encoding": "base64"}, &blob); err != nil {
-			return "", err
+			return "", fmt.Errorf("create the blob of %s: %w", ch.Path, err)
 		}
 		sha := blob.SHA
 		entries = append(entries, entry{Path: ch.Path, Mode: "100644", Type: "blob", SHA: &sha})
@@ -308,14 +309,14 @@ func (g *GitHub) Commit(ctx context.Context, token, branch, message string, chan
 	}
 	if _, err := g.api.call(ctx, "create_tree", token, http.MethodPost, g.r("/git/trees"),
 		map[string]any{"base_tree": parent.Tree.SHA, "tree": entries}, &tree); err != nil {
-		return "", err
+		return "", fmt.Errorf("create the tree: %w", err)
 	}
 	var commit struct {
 		SHA string `json:"sha"`
 	}
 	if _, err := g.api.call(ctx, "create_commit", token, http.MethodPost, g.r("/git/commits"),
 		map[string]any{"message": message, "tree": tree.SHA, "parents": []string{head}}, &commit); err != nil {
-		return "", err
+		return "", fmt.Errorf("create the commit: %w", err)
 	}
 	_, err = g.api.call(ctx, "update_ref", token, http.MethodPatch, g.r("/git/refs/heads/"+pathEscapeSegments(branch)),
 		map[string]any{"sha": commit.SHA, "force": false}, nil)
@@ -324,7 +325,7 @@ func (g *GitHub) Commit(ctx context.Context, token, branch, message string, chan
 		return "", ErrConflict
 	}
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("move the branch: %w", err)
 	}
 	return commit.SHA, nil
 }

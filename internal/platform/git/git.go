@@ -19,7 +19,7 @@ import (
 
 // Sentinel errors returned by providers.
 var (
-	ErrNotFound     = errors.New("git: not found")
+	ErrNotFound     = errors.New("git provider: not found (HTTP 404)")
 	ErrUnauthorized = errors.New("git: token rejected")
 	ErrConflict     = errors.New("git: ref changed concurrently")
 )

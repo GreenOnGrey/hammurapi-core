@@ -406,6 +406,12 @@ func (p *Processor) pullRequest(ctx context.Context, ev *git.PREvent) error {
 				return err
 			}
 		default: // opened, updated, reopened
+			// FTR.HMR.DEV-0004 R2: the title of the provider, also over an older one taken from the agent.
+			if ev.Title != "" && ev.Title != pr.Title {
+				if err := cd.SetPRTitle(ctx, pr.ID, ev.Title); err != nil {
+					return err
+				}
+			}
 			if ev.HeadSHA != "" && ev.HeadSHA != pr.HeadSHA {
 				if err := cd.SetPRHead(ctx, pr.ID, ev.HeadSHA); err != nil {
 					return err

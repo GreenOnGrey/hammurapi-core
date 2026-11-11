@@ -80,6 +80,7 @@ type Result struct {
 	ErrorClass   string      `json:"errorClass,omitempty"`
 	PRNumber     int         `json:"prNumber,omitempty"`
 	PRURL        string      `json:"prUrl,omitempty"`
+	PRTitle      string      `json:"prTitle,omitempty"`
 	Branch       string      `json:"branch,omitempty"`
 	HeadSHA      string      `json:"headSha,omitempty"`
 	Requirements []string    `json:"requirements"`
@@ -553,8 +554,10 @@ func storePR(ctx context.Context, cd *cycledata.DB, t *cycledata.Task, res Resul
 		return err
 	}
 	pr.URL, pr.Branch, pr.HeadSHA = res.PRURL, res.Branch, res.HeadSHA
-	if pr.Title == "" {
-		pr.Title = res.Summary
+	if res.PRTitle != "" {
+		// FTR.HMR.DEV-0004 R2: the title Hammurapi gave the PR, not the answer of
+		// the agent; the webhook of the PR keeps it in sync afterwards.
+		pr.Title = res.PRTitle
 	}
 	if kind == "revert" {
 		var in TaskInput

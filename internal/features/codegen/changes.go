@@ -15,6 +15,7 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/git"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/nabu"
@@ -144,6 +145,7 @@ func commit(ctx context.Context, p git.Provider, token string, d *Description, r
 	}
 	res.Requirements = mentionedReqs(text, d)
 	res.TestCases = testCasesIn(changes, d)
+	created := false
 	if h, err := p.BranchHead(ctx, token, d.Branch); err != nil || h == "" {
 		head, err := p.BranchHead(ctx, token, base)
 		if err != nil {
@@ -152,21 +154,34 @@ func commit(ctx context.Context, p git.Provider, token string, d *Description, r
 		if err := p.CreateBranch(ctx, token, d.Branch, head); err != nil {
 			return withErr(res, ClassGit, fmt.Errorf("create branch: %w", err))
 		}
+		created = true
 	}
 	msg := git.Trailers{Feature: d.Feature, Req: res.Requirements, Agent: true, Initiator: d.Initiator, Task: d.ID.String(), Release: d.Release}.
 		Message(commitSubject(d))
 	sha, err := p.Commit(ctx, token, d.Branch, msg, changes)
+	// FTR.HMR.DEV-0004 R3: a branch the provider has just created may not be
+	// readable yet; a 404 then is a lag of the provider, not a missing branch.
+	for i := 0; created && errors.Is(err, git.ErrNotFound) && i < len(newBranchRetries); i++ {
+		select {
+		case <-ctx.Done():
+			return withErr(res, ClassGit, ctx.Err())
+		case <-time.After(newBranchRetries[i]):
+		}
+		sha, err = p.Commit(ctx, token, d.Branch, msg, changes)
+	}
 	if err != nil {
-		return withErr(res, ClassGit, fmt.Errorf("commit: %w", err))
+		return withErr(res, ClassGit, fmt.Errorf("commit to %s: %w", d.Branch, err))
 	}
 	res.Branch, res.HeadSHA = d.Branch, sha
 	number := d.Input.PRNumber
 	if number == 0 {
-		pr, err := p.CreatePR(ctx, token, d.Branch, base, fmt.Sprintf("%s %s: %s", d.Feature, d.Service, d.FeatureTitle), prBody(d, res))
+		title := fmt.Sprintf("%s %s: %s", d.Feature, d.Service, d.FeatureTitle)
+		pr, err := p.CreatePR(ctx, token, d.Branch, base, title, prBody(d, res))
 		if err != nil {
 			return withErr(res, ClassGit, fmt.Errorf("create PR: %w", err))
 		}
-		number, res.PRURL = pr.Number, pr.URL
+		// FTR.HMR.DEV-0004 R2: the row of the PR shows its title, not the answer of the agent.
+		number, res.PRURL, res.PRTitle = pr.Number, pr.URL, title
 		if d.Autonomy == "pr" && len(d.Reviewers) > 0 {
 			if err := p.RequestReview(ctx, token, number, d.Reviewers); err != nil {
 				slog.Warn("request review failed", "err", err)
@@ -190,6 +205,10 @@ func commit(ctx context.Context, p git.Provider, token string, d *Description, r
 	res.Status = "succeeded"
 	return res
 }
+
+// newBranchRetries are the pauses before the commit is retried after a 404 on
+// a branch just created; a variable for the tests.
+var newBranchRetries = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}
 
 func withErr(res Result, class string, err error) Result {
 	res.Status, res.ErrorClass, res.Error = "failed", class, err.Error()
