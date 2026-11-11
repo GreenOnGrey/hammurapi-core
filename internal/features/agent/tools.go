@@ -118,6 +118,10 @@ func schema(props map[string]any, required ...string) map[string]any {
 
 var areaProp = map[string]any{"type": "string", "enum": []string{"product", "design", "arch", "tech", "qa"}}
 
+// fileAreaProp is the area of the tools on files: the gates and discovery, the
+// folder of the materials of the research (FTR.HMR.DISC-0001 R30, tech §4.8).
+var fileAreaProp = map[string]any{"type": "string", "enum": []string{specindex.AreaDiscovery, "product", "design", "arch", "tech", "qa"}}
+
 var discoverySchema = schema(map[string]any{
 	"content": map[string]any{"type": "string", "description": "The analysis in Markdown: the problem and its context, affected systems and services, risks; for a Problem — the hypothesis of the cause. Never repeat the other fields here — value, measure, similar, problemFeature, estimate and questions are shown as blocks of their own; no section of open questions."},
 	"value":   map[string]any{"type": "string", "description": "What value the issue has (one paragraph)."},
@@ -173,32 +177,69 @@ var estimateSchema = map[string]any{"type": "object", "description": "The draft 
 			"judgement": map[string]any{"type": "boolean"}}},
 	}, "required": []string{"agent", "people", "days", "waitDays", "confidence", "basis"}}
 
-// gateArgs reads uniqueId and area of a tool on the files of a gate; a task reads only its own feature.
-func (d ToolDeps) gateArgs(ctx context.Context, g mcp.Grant, raw json.RawMessage) (*domain.Principal, string, domain.Area, error) {
+// fileArgs are the arguments of a tool on the files of a feature folder: a gate
+// area, or discovery — the materials of the research, not a gate (FTR.HMR.DISC-0001 R30).
+type fileArgs struct {
+	p         *domain.Principal
+	uid       string
+	area      domain.Area // empty with discovery
+	discovery bool
+}
+
+// gateArgs reads uniqueId and area of a tool on the files of a gate or of
+// discovery; a task reads only its own feature.
+func (d ToolDeps) gateArgs(ctx context.Context, g mcp.Grant, raw json.RawMessage) (fileArgs, error) {
 	var a struct {
 		UniqueID string `json:"uniqueId"`
 		Area     string `json:"area"`
 	}
 	if err := json.Unmarshal(raw, &a); err != nil {
-		return nil, "", "", &mcp.ToolError{Msg: "invalid arguments"}
+		return fileArgs{}, &mcp.ToolError{Msg: "invalid arguments"}
 	}
 	if g.Mode == mcp.ModeTask && a.UniqueID != g.Feature {
-		return nil, "", "", &mcp.ToolError{Msg: "a task reads only the specification of its feature " + g.Feature}
+		return fileArgs{}, &mcp.ToolError{Msg: "a task reads only the specification of its feature " + g.Feature}
 	}
-	area, err := domain.ParseArea(a.Area)
-	if err != nil {
-		return nil, "", "", &mcp.ToolError{Msg: err.Error()}
+	out := fileArgs{uid: a.UniqueID, discovery: a.Area == specindex.AreaDiscovery}
+	if !out.discovery {
+		var err error
+		if out.area, err = domain.ParseArea(a.Area); err != nil {
+			return fileArgs{}, &mcp.ToolError{Msg: err.Error()}
+		}
 	}
 	p, err := d.Principal(ctx, g.UserID)
 	if err != nil {
-		return nil, "", "", err
+		return fileArgs{}, err
 	}
-	return p, a.UniqueID, area, nil
+	out.p = p
+	return out, nil
 }
 
 // textFile tells a file an agent can read as text: a mockup, a contract, text.
 func textFile(mt string) bool {
 	return strings.HasPrefix(mt, "text/") || mt == "image/svg+xml" || mt == "application/json" || specindex.IsContract(mt)
+}
+
+// discoveryFiles lists discovery/ of a feature for list_gate_files: the document first.
+func (d ToolDeps) discoveryFiles(ctx context.Context, p *domain.Principal, uid string) (string, error) {
+	out, err := d.Gates.Discovery(ctx, p, uid)
+	if err != nil {
+		return "", toolErr(err)
+	}
+	if out.Document == nil && len(out.Files) == 0 {
+		return "No materials of the research: the folder discovery is empty.", nil
+	}
+	var b strings.Builder
+	if out.Document != nil {
+		fmt.Fprintf(&b, "%s\t%s\t%d bytes\n", git.DiscoveryDoc, "text/markdown", len(out.Document.Markdown))
+	}
+	for _, f := range out.Files {
+		if f.Size < 0 { // GitLab gives no size in a tree
+			fmt.Fprintf(&b, "%s\t%s\tsize unknown\n", f.Name, f.MimeType)
+		} else {
+			fmt.Fprintf(&b, "%s\t%s\t%d bytes\n", f.Name, f.MimeType, f.Size)
+		}
+	}
+	return b.String(), nil
 }
 
 func toolErr(err error) error {
@@ -405,22 +446,26 @@ func Tools(d ToolDeps) []mcp.Tool {
 		},
 		{
 			// FTR.HMR.SPEC-0004 R8, tech decision 10: the files beside the documents — mockups of design, contracts of tech
-			Name:        "list_gate_files",
-			Description: "List the files beside the document of a feature's gate: mockups of design, OpenAPI and proto contracts of tech. Read one with read_gate_file.",
+			Name: "list_gate_files",
+			Description: "List the files beside the document of a feature's gate: mockups of design, OpenAPI and proto contracts of tech. " +
+				"With area discovery — the materials of the research: discovery.md (the Discovery document) and the files the experts put beside it. Read one with read_gate_file.",
 			Modes:       readers,
 			ReadOnly:    true,
-			InputSchema: schema(map[string]any{"uniqueId": map[string]any{"type": "string"}, "area": areaProp}, "uniqueId", "area"),
+			InputSchema: schema(map[string]any{"uniqueId": map[string]any{"type": "string"}, "area": fileAreaProp}, "uniqueId", "area"),
 			Handler: func(ctx context.Context, g mcp.Grant, raw json.RawMessage) (string, error) {
-				p, uid, area, err := d.gateArgs(ctx, g, raw)
+				a, err := d.gateArgs(ctx, g, raw)
 				if err != nil {
 					return "", err
 				}
-				out, err := d.Gates.Files(ctx, p, uid, area)
+				if a.discovery {
+					return d.discoveryFiles(ctx, a.p, a.uid)
+				}
+				out, err := d.Gates.Files(ctx, a.p, a.uid, a.area)
 				if err != nil {
 					return "", toolErr(err)
 				}
 				if len(out.Files) == 0 {
-					return "No files beside the document of " + string(area) + ".", nil
+					return "No files beside the document of " + string(a.area) + ".", nil
 				}
 				var b strings.Builder
 				for _, f := range out.Files {
@@ -430,19 +475,26 @@ func Tools(d ToolDeps) []mcp.Tool {
 			},
 		},
 		{
-			Name:        "read_gate_file",
-			Description: "Read a text file beside the document of a feature's gate by its name from list_gate_files: a mockup (HTML, SVG), an OpenAPI or proto contract.",
+			Name: "read_gate_file",
+			Description: "Read a text file beside the document of a feature's gate by its name from list_gate_files: a mockup (HTML, SVG), an OpenAPI or proto contract; " +
+				"with area discovery — a text material of the research. Images, PDF and presentations are not text: only their names are known.",
 			Modes:       readers,
 			ReadOnly:    true,
-			InputSchema: schema(map[string]any{"uniqueId": map[string]any{"type": "string"}, "area": areaProp, "name": map[string]any{"type": "string"}}, "uniqueId", "area", "name"),
+			InputSchema: schema(map[string]any{"uniqueId": map[string]any{"type": "string"}, "area": fileAreaProp, "name": map[string]any{"type": "string"}}, "uniqueId", "area", "name"),
 			Handler: func(ctx context.Context, g mcp.Grant, raw json.RawMessage) (string, error) {
-				p, uid, area, err := d.gateArgs(ctx, g, raw)
+				a, err := d.gateArgs(ctx, g, raw)
 				if err != nil {
 					return "", err
 				}
-				var a struct{ Name string }
-				_ = json.Unmarshal(raw, &a)
-				gf, data, err := d.Gates.File(ctx, p, uid, area, a.Name)
+				var n struct{ Name string }
+				_ = json.Unmarshal(raw, &n)
+				var gf *gates.GateFile
+				var data []byte
+				if a.discovery {
+					gf, data, err = d.Gates.DiscoveryFile(ctx, a.p, a.uid, n.Name)
+				} else {
+					gf, data, err = d.Gates.File(ctx, a.p, a.uid, a.area, n.Name)
+				}
 				if err != nil {
 					return "", toolErr(err)
 				}

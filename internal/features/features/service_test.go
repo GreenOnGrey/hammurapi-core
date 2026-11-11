@@ -50,7 +50,7 @@ func TestCreateFromIssueGitFailure(t *testing.T) {
 			if ch[0].Path != "specs/FMS/CAR/FTR.FMS.CAR-0008/product/spec.md" || !strings.Contains(string(ch[0].Content), "| bookings | `SELECT 1` | +5% | 14d |") {
 				t.Fatalf("unexpected product doc %s %q", ch[0].Path, ch[0].Content)
 			}
-			if len(ch) != 2 || ch[1].Path != "specs/FMS/CAR/FTR.FMS.CAR-0008/discovery.md" {
+			if len(ch) != 2 || ch[1].Path != "specs/FMS/CAR/FTR.FMS.CAR-0008/discovery/discovery.md" { // DF-01: in the folder of the materials (FTR.HMR.DISC-0001 R30)
 				t.Fatalf("discovery.md missing: %+v", ch)
 			}
 			if tr := git.ParseTrailers(msg); tr.Feature != "FTR.FMS.CAR-0008" || tr.Area != "product" {

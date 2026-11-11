@@ -27,6 +27,8 @@ func (h *Handlers) Routes(r chi.Router) {
 		r.Get("/files", httpx.Handler(h.files))       // FTR.HMR.DEV-0003 R1
 		r.Get("/files/raw", httpx.Handler(h.fileRaw)) // R3, R5
 	})
+	r.Get("/features/{uniqueId}/discovery", httpx.Handler(h.discovery))              // FTR.HMR.DISC-0001 R30
+	r.Get("/features/{uniqueId}/discovery/files/raw", httpx.Handler(h.discoveryRaw)) // R30
 	r.Get("/features/{uniqueId}/spec/changes", httpx.Handler(h.changes))
 	r.Get("/features/{uniqueId}/spec/links", httpx.Handler(h.links)) // FTR.HMR.DEV-0003 R6
 }

@@ -788,6 +788,7 @@ func Prompt(f *specdata.Feature, req Request, d PromptData) string {
 			writeDiscovery(&b, x)
 		}
 	}
+	b.WriteString(discoveryMaterials)
 	for _, a := range domain.Areas {
 		if doc, ok := d.Docs[a]; ok {
 			fmt.Fprintf(&b, "\n=== %s/spec.md ===\n%s\n", a, doc)
@@ -835,6 +836,11 @@ func Prompt(f *specdata.Feature, req Request, d PromptData) string {
 	b.WriteString("\nCall submit_gate once per area.")
 	return b.String()
 }
+
+// discoveryMaterials names the folder of the materials of the research
+// (FTR.HMR.DISC-0001 R30, tech §4.8): agents see the files, read the text ones.
+const discoveryMaterials = "\nMaterials of the research (presentations, images, notes the experts put beside the Discovery document), if any, are in the folder discovery of the feature: " +
+	"when the Discovery above points to them or you need them, list them with list_gate_files, area discovery, and read the text ones with read_gate_file. Images, PDF and presentations are known only by name.\n"
 
 // writeRules are the rules of a write run (R5, R10, R13, R21, R24).
 const writeRules = `
