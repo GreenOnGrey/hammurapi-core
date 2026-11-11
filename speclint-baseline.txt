@@ -1,0 +1,27 @@
+# Known errors of speclint (FTR.HMR.SPEC-0002); the file only shrinks.
+# The index projects the test cases of indexed features (R15): IDs of tests that name another feature or a feature
+# not linked to hammurapi-core (its tech names no service keys) until their specifications and tests are fixed.
+unknown-test-id internal/features/agent/spec_tools_test.go QS-16
+unknown-test-id internal/features/agent/spec_tools_test.go QS-18
+unknown-test-id internal/features/agent/spec_tools_test.go RQ-05
+unknown-test-id internal/features/agent/spec_tools_test.go RT-01
+unknown-test-id internal/features/agent/spec_tools_test.go RT-05
+unknown-test-id internal/features/agent/spec_tools_test.go WR-18
+unknown-test-id internal/features/agent/spec_tools_test.go WR-20
+unknown-test-id internal/features/approvals/service_test.go GEN-01
+unknown-test-id internal/features/approvals/service_test.go GEN-02
+unknown-test-id internal/features/approvals/service_test.go GEN-06
+unknown-test-id internal/features/approvals/service_test.go GEN-08
+unknown-test-id internal/features/approvals/service_test.go GEN-09
+unknown-test-id internal/features/features/service_test.go GEN-08
+unknown-test-id internal/features/features/service_test.go GEN-09
+unknown-test-id internal/features/gates/service_test.go GEN-03
+unknown-test-id internal/features/specindex/parse_test.go DF-02
+unknown-test-id internal/features/specindex/parse_test.go DF-04
+unknown-test-id internal/itest/spec_trace_test.go SVC-12
+unknown-test-id internal/itest/spec_trace_test.go SVC-13
+unknown-test-id internal/itest/spec_trace_test.go SVC-14
+unknown-test-id internal/itest/spec_trace_test.go SVC-15
+unknown-test-id internal/platform/markdown/trace_test.go GEN-05
+unknown-test-id internal/platform/markdown/trace_test.go GEN-06
+unknown-test-id internal/platform/mcp/mcp_test.go CHAT-02
