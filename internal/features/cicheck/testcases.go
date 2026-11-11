@@ -46,6 +46,8 @@ type Case struct {
 	ID      string `json:"id"`
 	Feature string `json:"feature"`
 	Level   string `json:"level"`
+	// Services: the services the case is marked with, empty — every service of the feature (FTR.HMR.SPEC-0005 R1).
+	Services []string `json:"services"`
 }
 
 // requiredPhases need the tests in the code: code generation and later; a rolled back feature does not (tech §5, 5).
@@ -73,21 +75,32 @@ func (s *Service) testCases(ctx context.Context, serviceID uuid.UUID, key string
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	rows, err = s.pool.Query(ctx, `SELECT t.tc_id, f.unique_id, t.level FROM feature_services fs JOIN features f ON f.id = fs.feature_id
+	// FTR.HMR.SPEC-0005 R3: a case marked with other services is not a case of this one (A1: the filter is here,
+	// so speclint of any 2.x version in the CI of a service gets only its cases).
+	rows, err = s.pool.Query(ctx, `SELECT t.tc_id, f.unique_id, t.level, t.services FROM feature_services fs JOIN features f ON f.id = fs.feature_id
 		JOIN test_cases t ON t.feature_id = f.id
 		WHERE fs.service_id = $1 AND f.phase <> 'deleted' AND f.deleted_at IS NULL ORDER BY f.unique_id, t.tc_id`, serviceID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+	filtered := 0
 	for rows.Next() {
 		var c Case
-		if err := rows.Scan(&c.ID, &c.Feature, &c.Level); err != nil {
+		if err := rows.Scan(&c.ID, &c.Feature, &c.Level, &c.Services); err != nil {
 			return nil, err
+		}
+		if len(c.Services) > 0 && !slices.Contains(c.Services, key) {
+			filtered++
+			continue
 		}
 		out.Cases = append(out.Cases, c)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	metrics.CITestCasesFiltered.WithLabelValues(key).Add(float64(filtered))
+	return out, nil
 }
 
 // limiter allows 60 requests a minute per token (arch §3.5), and as many failed attempts per address.

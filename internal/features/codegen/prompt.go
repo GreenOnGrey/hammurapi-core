@@ -83,6 +83,12 @@ func Prompt(d *Description) string {
 			fmt.Fprintf(&b, "- %s [%s] (%s): %s\n", tc.ID, tc.Level, strings.Join(tc.ReqIDs, ", "), tc.Title)
 		}
 	}
+	if len(d.OtherTestCases) > 0 { // FTR.HMR.SPEC-0005 R5
+		b.WriteString("\nTest cases of other services, for reference only — do not write them here:\n")
+		for _, tc := range d.OtherTestCases {
+			fmt.Fprintf(&b, "- %s [%s] (%s): %s\n", tc.ID, strings.Join(tc.Services, ", "), strings.Join(tc.ReqIDs, ", "), tc.Title)
+		}
+	}
 	for _, a := range []string{"tech", "arch", "product", "qa"} {
 		if s, ok := d.Specs[a]; ok {
 			fmt.Fprintf(&b, "\n=== %s specification ===\n%s\n", a, s)

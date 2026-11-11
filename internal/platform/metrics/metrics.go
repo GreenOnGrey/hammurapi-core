@@ -198,3 +198,10 @@ var SpecToolCalls = prometheus.NewCounterVec(prometheus.CounterOpts{
 }, []string{"tool", "source"})
 
 func init() { Registry.MustRegister(SpecToolCalls) }
+
+// FTR.HMR.SPEC-0005 arch §8: test cases of another service left out of the answer to the CI of a service.
+var CITestCasesFiltered = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Name: "hammurapi_ci_test_cases_filtered_total", Help: "Test cases marked with other services, left out of the test cases of a service.",
+}, []string{"service"})
+
+func init() { Registry.MustRegister(CITestCasesFiltered) }

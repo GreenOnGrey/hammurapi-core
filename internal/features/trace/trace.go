@@ -93,7 +93,7 @@ func Project(ctx context.Context, q postgres.Querier, featureID uuid.UUID, docs 
 		tcs := markdown.ParseTestCases(*docs.QA)
 		rows := make([]cycledata.TestCase, 0, len(tcs))
 		for _, tc := range tcs {
-			rows = append(rows, cycledata.TestCase{ID: tc.ID, Level: tc.Level, ReqIDs: tc.ReqIDs, Title: tc.Title})
+			rows = append(rows, cycledata.TestCase{ID: tc.ID, Level: tc.Level, ReqIDs: tc.ReqIDs, Title: tc.Title, Services: tc.Services})
 		}
 		if err := cd.ReplaceTestCases(ctx, featureID, rows); err != nil {
 			return res, err

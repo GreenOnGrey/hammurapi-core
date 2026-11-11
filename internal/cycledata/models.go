@@ -8,6 +8,7 @@ package cycledata
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -173,6 +174,13 @@ type TestCase struct {
 	Level  string   `json:"level"`
 	ReqIDs []string `json:"requirements"`
 	Title  string   `json:"title"`
+	// Services: the keys of the column «Сервисы»; empty — every service of the feature (FTR.HMR.SPEC-0005 R1).
+	Services []string `json:"services"`
+}
+
+// OtherService tells whether the case is marked with other services only (FTR.HMR.SPEC-0005 R3, R5).
+func (t TestCase) OtherService(key string) bool {
+	return len(t.Services) > 0 && !slices.Contains(t.Services, key)
 }
 
 // PR is a pull/merge request tracked by Hammurapi.

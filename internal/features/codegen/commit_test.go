@@ -9,6 +9,7 @@ import (
 
 	"go.uber.org/mock/gomock"
 
+	"github.com/GreenOnGrey/hammurapi-core/internal/cycledata"
 	"github.com/GreenOnGrey/hammurapi-core/internal/domain"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/git"
 	gmocks "github.com/GreenOnGrey/hammurapi-core/internal/platform/git/mocks"
@@ -75,5 +76,23 @@ func TestCommitNotFoundOnExistingBranch(t *testing.T) {
 	}
 	if strings.Contains(res.Error, "git: not found") {
 		t.Fatalf("error reads as a missing binary: %q", res.Error)
+	}
+}
+
+// FTR.HMR.SPEC-0005 qa TCS-09: the cases of the service are to write, the cases of other services are for reference.
+func TestPromptSplitsTestCasesByService(t *testing.T) {
+	d := commitDescription()
+	d.Service = "nabu-web"
+	d.TestCases = []cycledata.TestCase{{ID: "UI-01", Level: "E", ReqIDs: []string{"R2"}, Title: "Screen"},
+		{ID: "CTR-01", Level: "I", ReqIDs: []string{"R3"}, Title: "Contract", Services: []string{"nabu-core", "nabu-web"}}}
+	d.OtherTestCases = []cycledata.TestCase{{ID: "MIG-01", Level: "I", ReqIDs: []string{"R1"}, Title: "Migration", Services: []string{"nabu-core"}}}
+	p := Prompt(d)
+	mine := strings.Index(p, "Test cases — put the ID")
+	other := strings.Index(p, "Test cases of other services, for reference only")
+	if mine < 0 || other < mine {
+		t.Fatalf("blocks: mine %d, other %d", mine, other)
+	}
+	if strings.Contains(p[mine:other], "MIG-01") || !strings.Contains(p[mine:other], "CTR-01") || !strings.Contains(p[other:], "MIG-01 [nabu-core]") {
+		t.Fatalf("prompt:\n%s", p[mine:])
 	}
 }

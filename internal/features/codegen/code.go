@@ -64,7 +64,9 @@ type Description struct {
 	Check        *cycledata.ServiceCheck `json:"check,omitempty"`
 	Requirements []cycledata.Requirement `json:"requirements"`
 	TestCases    []cycledata.TestCase    `json:"testCases"`
-	Specs        map[string]string       `json:"specs"`
+	// OtherTestCases are marked with other services: for reference only (FTR.HMR.SPEC-0005 R5).
+	OtherTestCases []cycledata.TestCase `json:"otherTestCases,omitempty"`
+	Specs          map[string]string    `json:"specs"`
 	// Contracts are the contract files of the service next to tech: name → content (FTR.HMR.SPEC-0004 R8).
 	Contracts map[string]string `json:"contracts,omitempty"`
 	Input     TaskInput         `json:"input"`
@@ -181,10 +183,18 @@ func (c *Code) describe(ctx context.Context, t *cycledata.Task) (*Description, e
 			return nil, err
 		}
 		for _, tc := range tcs {
-			for _, id := range tc.ReqIDs {
-				if mine[id] {
-					d.TestCases = append(d.TestCases, tc)
-					break
+			// FTR.HMR.SPEC-0005 R5: the column «Сервисы» decides; a case without it is the service's by its requirements
+			switch {
+			case tc.OtherService(svc.Key):
+				d.OtherTestCases = append(d.OtherTestCases, tc)
+			case len(tc.Services) > 0:
+				d.TestCases = append(d.TestCases, tc)
+			default:
+				for _, id := range tc.ReqIDs {
+					if mine[id] {
+						d.TestCases = append(d.TestCases, tc)
+						break
+					}
 				}
 			}
 		}
