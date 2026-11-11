@@ -312,6 +312,10 @@ func (s *Service) check(ctx context.Context) (result, error) {
 	if err := s.syncDocuments(ctx, token, head, indexable); err != nil {
 		return res, err
 	}
+	// FTR.HMR.SPEC-0002 R15: the test cases and services of indexed features, from the documents just synced
+	if err := s.projectIndexed(ctx); err != nil {
+		return res, err
+	}
 	return res, nil
 }
 
