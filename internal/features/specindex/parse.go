@@ -14,6 +14,7 @@ import (
 	"github.com/GreenOnGrey/speclint/v2/contract"
 	"go.yaml.in/yaml/v3"
 
+	"github.com/GreenOnGrey/hammurapi-core/internal/platform/git"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/markdown"
 )
 
@@ -31,6 +32,13 @@ func validArea(a string) bool {
 
 var pathRe = regexp.MustCompile(`^specs/([A-Z][A-Z0-9]{1,9})/([A-Z][A-Z0-9]{1,9})/([^/]+)/([a-z]+)/(.+)$`)
 
+// AreaDiscovery is the folder of the materials of the research: not a gate, its
+// files are indexed as files and discovery.md is its document (FTR.HMR.DISC-0001 R30).
+const AreaDiscovery = "discovery"
+
+// legacyDiscoveryRe is the Discovery document in the root of a feature folder, before R30.
+var legacyDiscoveryRe = regexp.MustCompile(`^specs/([A-Z][A-Z0-9]{1,9})/([A-Z][A-Z0-9]{1,9})/([^/]+)/discovery\.md$`)
+
 // Loc is a file of a feature folder: specs/<domain>/<system>/<folder>/<area>/<rest>.
 type Loc struct {
 	Domain, System, Folder, Area, Rest string
@@ -41,14 +49,26 @@ func (l Loc) Dir() string {
 	return "specs/" + l.Domain + "/" + l.System + "/" + l.Folder + "/"
 }
 
-// IsDocument reports whether the file is the area's spec.md.
-func (l Loc) IsDocument() bool { return l.Rest == "spec.md" }
+// IsDocument reports whether the file is the spec.md of a gate area; the files
+// of discovery are files, its document included.
+func (l Loc) IsDocument() bool { return l.Area != AreaDiscovery && l.Rest == "spec.md" }
 
 // ParsePath parses a repository path; ok is false outside feature folders and
-// for unknown areas.
+// for unknown areas. A file of discovery/ (no nested folders) and the legacy
+// discovery.md in the root of the folder belong to the area discovery.
 func ParsePath(p string) (Loc, bool) {
+	if m := legacyDiscoveryRe.FindStringSubmatch(p); m != nil {
+		return Loc{Domain: m[1], System: m[2], Folder: m[3], Area: AreaDiscovery, Rest: git.DiscoveryDoc}, true
+	}
 	m := pathRe.FindStringSubmatch(p)
-	if m == nil || !validArea(m[4]) {
+	if m == nil {
+		return Loc{}, false
+	}
+	if m[4] == AreaDiscovery {
+		if strings.Contains(m[5], "/") {
+			return Loc{}, false
+		}
+	} else if !validArea(m[4]) {
 		return Loc{}, false
 	}
 	return Loc{Domain: m[1], System: m[2], Folder: m[3], Area: m[4], Rest: m[5]}, true

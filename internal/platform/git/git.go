@@ -359,9 +359,25 @@ func SpecDir(domainKey, systemKey, uniqueID, area string) string {
 	return fmt.Sprintf("specs/%s/%s/%s/%s", domainKey, systemKey, uniqueID, area)
 }
 
+// DiscoveryDoc is the name of the Discovery document in the folder of materials.
+const DiscoveryDoc = "discovery.md"
+
+// DiscoveryDir is the folder of the materials of the research beside the areas
+// of a feature: the Discovery document and the files people put there
+// (FTR.HMR.DISC-0001 R30).
+func DiscoveryDir(domainKey, systemKey, uniqueID string) string {
+	return fmt.Sprintf("specs/%s/%s/%s/discovery", domainKey, systemKey, uniqueID)
+}
+
 // DiscoveryPath is the Discovery document copied into the feature folder on acceptance.
 func DiscoveryPath(domainKey, systemKey, uniqueID string) string {
-	return fmt.Sprintf("specs/%s/%s/%s/discovery.md", domainKey, systemKey, uniqueID)
+	return DiscoveryDir(domainKey, systemKey, uniqueID) + "/" + DiscoveryDoc
+}
+
+// LegacyDiscoveryPath is where the Discovery document lay before R30 of
+// FTR.HMR.DISC-0001: read, never written.
+func LegacyDiscoveryPath(domainKey, systemKey, uniqueID string) string {
+	return fmt.Sprintf("specs/%s/%s/%s/%s", domainKey, systemKey, uniqueID, DiscoveryDoc)
 }
 
 // SpecPath is the spec.md path of a gate.

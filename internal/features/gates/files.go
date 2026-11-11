@@ -92,11 +92,17 @@ func (s *Service) gateRef(ctx context.Context, p *domain.Principal, uniqueID str
 }
 
 func (s *Service) gateFile(f *specdata.Feature, area domain.Area, name, sha string, size int64) GateFile {
+	return s.folderFile("/api/v1/features/"+url.PathEscape(f.UniqueID)+"/gates/"+url.PathEscape(string(area))+"/files/raw", name, sha, size)
+}
+
+// folderFile is a file of a folder of the feature with the address of its raw
+// endpoint; a size below zero is unknown (FTR.HMR.DISC-0001 tech §3.6) and the
+// limit is checked when the file is served.
+func (s *Service) folderFile(raw, name, sha string, size int64) GateFile {
 	mt := specindex.MimeOf(name)
 	gf := GateFile{Name: name, Size: size, MimeType: mt, BlobSHA: sha, Previewable: specindex.Previewable(mt) && size <= s.PreviewMaxBytes}
 	if gf.Previewable && !specindex.IsContract(mt) { // a contract is read as text by the viewer of the API
-		gf.ViewURL = "/api/v1/features/" + url.PathEscape(f.UniqueID) + "/gates/" + url.PathEscape(string(area)) + "/files/raw?" +
-			url.Values{"name": {name}, "mode": {"view"}, "v": {sha}}.Encode()
+		gf.ViewURL = raw + "?" + url.Values{"name": {name}, "mode": {"view"}, "v": {sha}}.Encode()
 	}
 	return gf
 }

@@ -4,6 +4,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/GreenOnGrey/hammurapi-core/internal/platform/git"
 )
 
 func TestParsePath(t *testing.T) {
@@ -17,6 +19,28 @@ func TestParsePath(t *testing.T) {
 	for _, p := range []string{"specs/FMS/CAR/FTR.FMS.CAR-0042/notes/spec.md", "rules/x.md", "specs/fms/CAR/X/product/spec.md", "specs/FMS/CAR/X/spec.md"} {
 		if _, ok := ParsePath(p); ok {
 			t.Errorf("%s parsed", p)
+		}
+	}
+}
+
+// DF-02: the files of discovery/ and the legacy root discovery.md are files of
+// the area discovery, never documents; nested folders are not read.
+func TestParsePathDiscovery(t *testing.T) {
+	dir := "specs/FMS/CAR/FTR.FMS.CAR-0042/"
+	for p, rest := range map[string]string{
+		dir + "discovery/flow.png":     "flow.png",
+		dir + "discovery/discovery.md": "discovery.md",
+		dir + "discovery.md":           "discovery.md",
+		dir + "discovery/spec.md":      "spec.md",
+	} {
+		l, ok := ParsePath(p)
+		if !ok || l.Area != AreaDiscovery || l.Rest != rest || l.IsDocument() || l.Folder != "FTR.FMS.CAR-0042" || l.Dir() != dir {
+			t.Errorf("%s: %+v %v", p, l, ok)
+		}
+	}
+	for _, p := range []string{dir + "discovery/a/b.png", dir + "notes.md", "specs/FMS/CAR/discovery.md"} {
+		if l, ok := ParsePath(p); ok {
+			t.Errorf("%s parsed: %+v", p, l)
 		}
 	}
 }
@@ -201,5 +225,19 @@ func TestRequirementsWithSuffix(t *testing.T) {
 	refs := References("см. FTR.NAB.CMN-0001-R26c", "FTR.HMR.CMN-0007")
 	if len(refs) != 1 || refs[0].Target != "FTR.NAB.CMN-0001" || refs[0].Req != "R26c" {
 		t.Fatalf("refs %+v", refs)
+	}
+}
+
+// DF-04: a folder with only discovery/ is not a candidate (IDX-03); beside a
+// gate its files are files of the folder, not documents.
+func TestFoldersDiscovery(t *testing.T) {
+	dir := "specs/FMS/CAR/FTR.FMS.CAR-0042/"
+	if got := folders([]git.TreeEntry{{Path: dir + "discovery/discovery.md"}, {Path: dir + "discovery/flow.png"}}); len(got) != 0 {
+		t.Fatalf("only discovery: %+v", got)
+	}
+	got := folders([]git.TreeEntry{{Path: dir + "product/spec.md"}, {Path: dir + "discovery/discovery.md"}, {Path: dir + "discovery.md"}})
+	f := got[dir]
+	if f == nil || len(f.docs) != 1 || len(f.files) != 2 || f.titleArea() != "product" {
+		t.Fatalf("with product: %+v", f)
 	}
 }

@@ -128,6 +128,10 @@ func TestPrompt(t *testing.T) {
 			t.Errorf("no %q in the prompt", want)
 		}
 	}
+	// DF-12: the materials of the research are named with the tool that lists them
+	if !strings.Contains(p, "folder discovery of the feature") || !strings.Contains(p, "list_gate_files, area discovery") {
+		t.Error("the prompt does not name the materials of the research")
+	}
 	if strings.Contains(strings.ToLower(p), "grill") {
 		t.Error("the prompt names a skill")
 	}

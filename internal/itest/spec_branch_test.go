@@ -49,11 +49,44 @@ func TestSpecFeatureBranch(t *testing.T) {
 	idx := &fakeRepo{files: map[string]string{}, blobs: map[string]string{}}
 	idx.set(pathBooking, booking)
 	idx.set(pathBookingArch, bookingArch)
+	// FTR.HMR.DISC-0001 R30: the materials of the research of the indexed feature, with the legacy document too
+	const bookingDisc = "specs/FMS/CAR/FTR.FMS.CAR-0002/discovery/"
+	idx.set(bookingDisc+"discovery.md", "# Анализ брони\n\n## Риски\n")
+	idx.set(bookingDisc+"flow.png", "png-booking")
+	idx.set("specs/FMS/CAR/FTR.FMS.CAR-0002/discovery.md", "# Старый анализ\n")
+	idx.set(bookingDisc+"old/nested.md", "nested")
 	spec := specindex.NewService(db, idx.provider(t), nil, specindex.Config{DefaultBranch: "main"})
 	_, err = spec.Enqueue(ctx, db, specindex.TriggerManual, nil)
 	must(t, err)
 	if ran, err := spec.RunOnce(ctx); err != nil || !ran {
 		t.Fatalf("index ran=%v err=%v", ran, err)
+	}
+
+	// DF-03: the files of discovery are files of the index, never documents; nested folders are not read.
+	var discFiles, discDocs int
+	must(t, db.QueryRow(ctx, `SELECT (SELECT count(*) FROM spec_files WHERE area = 'discovery' AND feature_key = 'FTR.FMS.CAR-0002'),
+		(SELECT count(*) FROM spec_documents WHERE area = 'discovery')`).Scan(&discFiles, &discDocs))
+	if discFiles != 3 || discDocs != 0 {
+		t.Fatalf("discovery files %d, documents %d", discFiles, discDocs)
+	}
+	// DF-06, DF-08: the document of the navigator — the new path before the legacy one, from git by the SHA of the index.
+	dd, err := spec.Document(ctx, "FTR.FMS.CAR-0002", specindex.AreaDiscovery)
+	must(t, err)
+	if dd.Markdown != "# Анализ брони\n\n## Риски\n" || dd.Path != bookingDisc+"discovery.md" || len(dd.Areas) == 0 || dd.Areas[0] != "discovery" ||
+		dd.Title == "" || len(dd.TOC) != 1 {
+		t.Fatalf("discovery document %+v", dd)
+	}
+	if pd, err := spec.Document(ctx, "FTR.FMS.CAR-0002", "product"); err != nil || pd.Areas[0] != "discovery" || pd.Areas[1] != "product" {
+		t.Fatalf("areas of product %+v %v", pd, err)
+	}
+	// DF-07: the files of the area without its document.
+	if df, err := spec.Files(ctx, "FTR.FMS.CAR-0002", specindex.AreaDiscovery); err != nil || len(df) != 1 || df[0].Name != "flow.png" || df[0].ViewURL == "" {
+		t.Fatalf("discovery files %+v %v", df, err)
+	}
+	_, err = db.Exec(ctx, `DELETE FROM spec_files WHERE path = $1`, bookingDisc+"discovery.md")
+	must(t, err)
+	if dd, err := spec.Document(ctx, "FTR.FMS.CAR-0002", specindex.AreaDiscovery); err != nil || dd.Markdown != "# Старый анализ\n" {
+		t.Fatalf("legacy discovery document %+v %v", dd, err)
 	}
 
 	user := tu.User()
@@ -200,6 +233,76 @@ func TestSpecFeatureBranch(t *testing.T) {
 		if _, err := call(c.g, "read_gate_file", c.args); !errors.As(err, &te) {
 			t.Fatalf("read_gate_file %v: %v", c.args, err)
 		}
+	}
+
+	// FTR.HMR.DISC-0001 R30: the materials of the research in the branch of the feature.
+	disc := "specs/FMS/CAR/FTR.FMS.CAR-0042/discovery/"
+	repo.set(f.Branch, disc+"discovery.md", "# Анализ\n")
+	repo.set(f.Branch, disc+"flow.png", "png")
+	repo.set(f.Branch, disc+"deck.pptx", "pptx")
+	repo.set(f.Branch, disc+"notes.md", "заметки эксперта")
+	repo.set(f.Branch, disc+"a/b.md", "nested")
+	// DF-09: the document and the files by name, without nested folders; a presentation is not previewable.
+	df, err := gs.Discovery(ctx, user, f.UniqueID)
+	must(t, err)
+	names = names[:0]
+	for _, x := range df.Files {
+		names = append(names, x.Name)
+	}
+	if df.Document == nil || df.Document.Markdown != "# Анализ\n" || df.Ref != f.Branch || strings.Join(names, ",") != "deck.pptx,flow.png,notes.md" ||
+		df.Files[0].ViewURL != "" || !strings.Contains(df.Files[1].ViewURL, "/discovery/files/raw?") {
+		t.Fatalf("discovery %+v %+v", df, df.Document)
+	}
+	if w := get("/api/v1/features/FTR.FMS.CAR-0042/discovery"); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"deck.pptx"`) {
+		t.Fatalf("GET discovery %d %s", w.Code, w.Body.String())
+	}
+	if w := get(df.Files[1].ViewURL); w.Code != http.StatusOK || w.Body.String() != "png" {
+		t.Fatalf("view flow.png %d", w.Code)
+	}
+	// DF-10: a path is not a name.
+	if _, _, err := gs.DiscoveryFile(ctx, user, f.UniqueID, "../product/spec.md"); !errors.As(err, &ae) || ae.Code != "invalid_name" {
+		t.Fatalf("discovery path %v", err)
+	}
+	// DF-11: the agent lists the materials with the document and reads only the text ones; a task reads only its feature.
+	out, err = call(personal, "list_gate_files", map[string]any{"uniqueId": f.UniqueID, "area": "discovery"})
+	if err != nil || !strings.Contains(out, "discovery.md\ttext/markdown") || !strings.Contains(out, "deck.pptx") || strings.Contains(out, "b.md") {
+		t.Fatalf("list_gate_files discovery %q %v", out, err)
+	}
+	for name, want := range map[string]string{"notes.md": "заметки эксперта", "discovery.md": "# Анализ"} {
+		if out, err := call(personal, "read_gate_file", map[string]any{"uniqueId": f.UniqueID, "area": "discovery", "name": name}); err != nil || !strings.Contains(out, want) {
+			t.Fatalf("read_gate_file discovery %s %q %v", name, out, err)
+		}
+	}
+	for _, c := range []struct {
+		g    mcp.Grant
+		name string
+	}{
+		{personal, "flow.png"},
+		{mcp.Grant{Mode: mcp.ModeTask, Feature: "FTR.FMS.CAR-0001", UserID: user.UserID}, "notes.md"},
+	} {
+		if _, err := call(c.g, "read_gate_file", map[string]any{"uniqueId": f.UniqueID, "area": "discovery", "name": c.name}); !errors.As(err, &te) {
+			t.Fatalf("read_gate_file discovery %s: %v", c.name, err)
+		}
+	}
+	// DF-08 in the branch: without discovery/discovery.md the legacy document in the root of the folder.
+	repo.mu.Lock()
+	delete(repo.files(f.Branch), disc+"discovery.md")
+	repo.mu.Unlock()
+	repo.set(f.Branch, "specs/FMS/CAR/FTR.FMS.CAR-0042/discovery.md", "# Старый\n")
+	if df, err := gs.Discovery(ctx, user, f.UniqueID); err != nil || df.Document == nil || df.Document.Markdown != "# Старый\n" {
+		t.Fatalf("legacy in the branch %+v %v", df, err)
+	}
+	// DF-10: neither folder nor document — an empty answer, not an error.
+	repo.mu.Lock()
+	for p := range repo.files(f.Branch) {
+		if strings.HasPrefix(p, disc) || strings.HasSuffix(p, "/discovery.md") {
+			delete(repo.files(f.Branch), p)
+		}
+	}
+	repo.mu.Unlock()
+	gp.EXPECT().BranchHead(gomock.Any(), gomock.Any(), f.Branch).Return("h", nil).AnyTimes()
+	if df, err := gs.Discovery(ctx, user, f.UniqueID); err != nil || df.Document != nil || len(df.Files) != 0 {
+		t.Fatalf("empty discovery %+v %v", df, err)
 	}
 
 	// DRAFT-01, DRAFT-02: the links of the feature in work from its branch, by layer, with the state of the gate.

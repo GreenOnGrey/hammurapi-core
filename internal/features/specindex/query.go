@@ -15,6 +15,7 @@ import (
 	"github.com/GreenOnGrey/speclint/v2/contract"
 
 	"github.com/GreenOnGrey/hammurapi-core/internal/apperr"
+	"github.com/GreenOnGrey/hammurapi-core/internal/platform/git"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/postgres"
 )
 
@@ -198,6 +199,9 @@ func notFoundDoc() error {
 
 // Document returns a document of the index with the links of its feature.
 func (s *Service) Document(ctx context.Context, key, area string) (*Document, error) {
+	if area == AreaDiscovery {
+		return s.discoveryDocument(ctx, key)
+	}
 	d := &Document{FeatureKey: key, Area: area}
 	var title *string
 	var toc []byte
@@ -217,11 +221,71 @@ func (s *Service) Document(ctx context.Context, key, area string) (*Document, er
 		d.TOC = []Heading{}
 	}
 	d.HistoryURL = s.historyURL(d.Path)
-	var areas []string
-	if err := s.pool.QueryRow(ctx, `SELECT array_agg(area) FROM spec_documents WHERE feature_key = $1`, key).Scan(&areas); err != nil {
+	if d.Areas, err = s.documentAreas(ctx, key); err != nil {
 		return nil, err
 	}
-	d.Areas = orderAreas(areas)
+	return s.withFeature(ctx, d, area)
+}
+
+// documentAreas are the tabs of a document: the gate areas with a document in
+// the index, after discovery when the feature has its files (FTR.HMR.DISC-0001 R30).
+func (s *Service) documentAreas(ctx context.Context, key string) ([]string, error) {
+	var areas []string
+	var discovery bool
+	if err := s.pool.QueryRow(ctx, `SELECT (SELECT array_agg(area) FROM spec_documents WHERE feature_key = $1),
+		EXISTS (SELECT 1 FROM spec_files WHERE feature_key = $1 AND area = $2)`, key, AreaDiscovery).Scan(&areas, &discovery); err != nil {
+		return nil, err
+	}
+	out := orderAreas(areas)
+	if discovery {
+		out = append([]string{AreaDiscovery}, out...)
+	}
+	return out, nil
+}
+
+// discoveryDocument is the document of the area discovery: discovery.md of the
+// index, read from git by the SHA of the index, the new path before the legacy
+// one (FTR.HMR.DISC-0001 tech §3.6). It is not parsed as a specification. With
+// materials and no discovery.md the document is empty; without either — 404.
+func (s *Service) discoveryDocument(ctx context.Context, key string) (*Document, error) {
+	d := &Document{FeatureKey: key, Area: AreaDiscovery, TOC: []Heading{}}
+	var err error
+	if d.Areas, err = s.documentAreas(ctx, key); err != nil {
+		return nil, err
+	}
+	if len(d.Areas) == 0 || d.Areas[0] != AreaDiscovery {
+		return nil, notFoundDoc()
+	}
+	err = s.pool.QueryRow(ctx, `SELECT path, blob_sha FROM spec_files WHERE feature_key = $1 AND area = $2 AND name = $3
+		ORDER BY length(path) DESC LIMIT 1`, key, AreaDiscovery, git.DiscoveryDoc).Scan(&d.Path, &d.BlobSHA)
+	switch {
+	case postgres.IsNoRows(err):
+	case err != nil:
+		return nil, err
+	default:
+		token, err := s.git.BotToken(ctx)
+		if err != nil {
+			return nil, err
+		}
+		data, err := s.git.Blob(ctx, token, d.BlobSHA)
+		if err != nil {
+			return nil, err
+		}
+		d.Markdown = string(data)
+		d.TOC = TOC(d.Markdown)
+		d.HistoryURL = s.historyURL(d.Path)
+	}
+	d, err = s.withFeature(ctx, d, AreaDiscovery)
+	if err == nil {
+		d.Title = d.Feature.Title
+	}
+	return d, err
+}
+
+// withFeature fills the header of a document: the title, the status and the
+// links of its feature.
+func (s *Service) withFeature(ctx context.Context, d *Document, area string) (*Document, error) {
+	key := d.FeatureKey
 	info, err := s.featureInfo(ctx, key)
 	if err != nil {
 		return nil, err
@@ -351,8 +415,9 @@ func Previewable(mt string) bool {
 
 // Files lists the files of an area.
 func (s *Service) Files(ctx context.Context, key, area string) ([]File, error) {
+	// the document of discovery is shown as its document, not among its files (FTR.HMR.DISC-0001 R30)
 	rows, err := s.pool.Query(ctx, `SELECT path, name, size_bytes, mime_type, blob_sha FROM spec_files
-		WHERE feature_key = $1 AND area = $2 ORDER BY name`, key, area)
+		WHERE feature_key = $1 AND area = $2 AND NOT (area = $3 AND name = $4) ORDER BY name`, key, area, AreaDiscovery, git.DiscoveryDoc)
 	if err != nil {
 		return nil, err
 	}
@@ -377,7 +442,8 @@ func (s *Service) Files(ctx context.Context, key, area string) ([]File, error) {
 func (s *Service) RawFile(ctx context.Context, key, area, name string) (*File, []byte, error) {
 	var f File
 	err := s.pool.QueryRow(ctx, `SELECT path, name, size_bytes, mime_type, blob_sha FROM spec_files
-		WHERE feature_key = $1 AND area = $2 AND name = $3`, key, area, name).Scan(&f.Path, &f.Name, &f.Size, &f.MimeType, &f.blobSHA)
+		WHERE feature_key = $1 AND area = $2 AND name = $3
+		ORDER BY length(path) DESC LIMIT 1`, key, area, name).Scan(&f.Path, &f.Name, &f.Size, &f.MimeType, &f.blobSHA) // discovery.md: the new path before the legacy one
 	if postgres.IsNoRows(err) {
 		return nil, nil, apperr.NotFound("spec_file_not_found", "the file is not in the specification index")
 	}
