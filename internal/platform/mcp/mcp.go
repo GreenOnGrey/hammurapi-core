@@ -245,7 +245,7 @@ func (s *Server) dispatch(ctx context.Context, g Grant, req request) (any, *rpcE
 			"protocolVersion": v,
 			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
 			"serverInfo":      map[string]string{"name": "hammurapi", "version": "1.0.0"},
-			"instructions":    "Hammurapi specification tools. Use search_specs and read_spec to research; request_spec_revision to change a specification: the writer agent writes the documents. Deleting specifications is not possible through tools: the user deletes them in the Hammurapi UI.",
+			"instructions":    "Hammurapi specification tools. Use search_specs, read_spec, list_gate_files and read_gate_file to research; request_spec_revision to change a specification: the writer agent writes the documents. Deleting specifications is not possible through tools: the user deletes them in the Hammurapi UI.",
 		}, nil
 	case "ping":
 		return map[string]any{}, nil

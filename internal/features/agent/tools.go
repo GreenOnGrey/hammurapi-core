@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/features"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/gates"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/specchanges"
+	"github.com/GreenOnGrey/hammurapi-core/internal/features/specindex"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/git"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/httpx"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/markdown"
@@ -170,6 +172,34 @@ var estimateSchema = map[string]any{"type": "object", "description": "The draft 
 			"features":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Keys of the similar released features"},
 			"judgement": map[string]any{"type": "boolean"}}},
 	}, "required": []string{"agent", "people", "days", "waitDays", "confidence", "basis"}}
+
+// gateArgs reads uniqueId and area of a tool on the files of a gate; a task reads only its own feature.
+func (d ToolDeps) gateArgs(ctx context.Context, g mcp.Grant, raw json.RawMessage) (*domain.Principal, string, domain.Area, error) {
+	var a struct {
+		UniqueID string `json:"uniqueId"`
+		Area     string `json:"area"`
+	}
+	if err := json.Unmarshal(raw, &a); err != nil {
+		return nil, "", "", &mcp.ToolError{Msg: "invalid arguments"}
+	}
+	if g.Mode == mcp.ModeTask && a.UniqueID != g.Feature {
+		return nil, "", "", &mcp.ToolError{Msg: "a task reads only the specification of its feature " + g.Feature}
+	}
+	area, err := domain.ParseArea(a.Area)
+	if err != nil {
+		return nil, "", "", &mcp.ToolError{Msg: err.Error()}
+	}
+	p, err := d.Principal(ctx, g.UserID)
+	if err != nil {
+		return nil, "", "", err
+	}
+	return p, a.UniqueID, area, nil
+}
+
+// textFile tells a file an agent can read as text: a mockup, a contract, text.
+func textFile(mt string) bool {
+	return strings.HasPrefix(mt, "text/") || mt == "image/svg+xml" || mt == "application/json" || specindex.IsContract(mt)
+}
 
 func toolErr(err error) error {
 	if err == nil {
@@ -371,6 +401,58 @@ func Tools(d ToolDeps) []mcp.Tool {
 					return "", toolErr(err)
 				}
 				return fmt.Sprintf("sha: %s\n\n%s", doc.SHA, doc.Content), nil
+			},
+		},
+		{
+			// FTR.HMR.SPEC-0004 R8, tech decision 10: the files beside the documents — mockups of design, contracts of tech
+			Name:        "list_gate_files",
+			Description: "List the files beside the document of a feature's gate: mockups of design, OpenAPI and proto contracts of tech. Read one with read_gate_file.",
+			Modes:       readers,
+			ReadOnly:    true,
+			InputSchema: schema(map[string]any{"uniqueId": map[string]any{"type": "string"}, "area": areaProp}, "uniqueId", "area"),
+			Handler: func(ctx context.Context, g mcp.Grant, raw json.RawMessage) (string, error) {
+				p, uid, area, err := d.gateArgs(ctx, g, raw)
+				if err != nil {
+					return "", err
+				}
+				out, err := d.Gates.Files(ctx, p, uid, area)
+				if err != nil {
+					return "", toolErr(err)
+				}
+				if len(out.Files) == 0 {
+					return "No files beside the document of " + string(area) + ".", nil
+				}
+				var b strings.Builder
+				for _, f := range out.Files {
+					fmt.Fprintf(&b, "%s\t%s\t%d bytes\n", f.Name, f.MimeType, f.Size)
+				}
+				return b.String(), nil
+			},
+		},
+		{
+			Name:        "read_gate_file",
+			Description: "Read a text file beside the document of a feature's gate by its name from list_gate_files: a mockup (HTML, SVG), an OpenAPI or proto contract.",
+			Modes:       readers,
+			ReadOnly:    true,
+			InputSchema: schema(map[string]any{"uniqueId": map[string]any{"type": "string"}, "area": areaProp, "name": map[string]any{"type": "string"}}, "uniqueId", "area", "name"),
+			Handler: func(ctx context.Context, g mcp.Grant, raw json.RawMessage) (string, error) {
+				p, uid, area, err := d.gateArgs(ctx, g, raw)
+				if err != nil {
+					return "", err
+				}
+				var a struct{ Name string }
+				_ = json.Unmarshal(raw, &a)
+				gf, data, err := d.Gates.File(ctx, p, uid, area, a.Name)
+				if err != nil {
+					return "", toolErr(err)
+				}
+				if !textFile(gf.MimeType) || !utf8.Valid(data) {
+					return "", &mcp.ToolError{Msg: fmt.Sprintf("%s is %s, not text: open it in Hammurapi", gf.Name, gf.MimeType)}
+				}
+				if d.Gates.PreviewMaxBytes > 0 && int64(len(data)) > d.Gates.PreviewMaxBytes {
+					return "", &mcp.ToolError{Msg: fmt.Sprintf("%s is %d bytes, more than %d: open it in Hammurapi", gf.Name, len(data), d.Gates.PreviewMaxBytes)}
+				}
+				return fmt.Sprintf("name: %s\nmime: %s\nsha: %s\n\n%s", gf.Name, gf.MimeType, gf.BlobSHA, data), nil
 			},
 		},
 		{
