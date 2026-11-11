@@ -4,6 +4,7 @@ package itest
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -17,12 +18,14 @@ import (
 
 	"github.com/GreenOnGrey/hammurapi-core/internal/apperr"
 	"github.com/GreenOnGrey/hammurapi-core/internal/domain"
+	"github.com/GreenOnGrey/hammurapi-core/internal/features/agent"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/gates"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/specchanges"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/specindex"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/git"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/git/mocks"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/httpx"
+	"github.com/GreenOnGrey/hammurapi-core/internal/platform/mcp"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/postgres"
 	"github.com/GreenOnGrey/hammurapi-core/internal/specdata"
 	tu "github.com/GreenOnGrey/hammurapi-core/internal/testutil"
@@ -164,6 +167,39 @@ func TestSpecFeatureBranch(t *testing.T) {
 	}
 	if _, _, err := gs.File(ctx, user, f.UniqueID, domain.AreaDesign, "spec.md"); !errors.As(err, &ae) || ae.Code != "invalid_name" {
 		t.Fatalf("spec.md is not a file of the gate: %v", err)
+	}
+
+	// FTR.HMR.SPEC-0004 qa FILE-05: the files beside a document through MCP, with the rights and the limit of the viewer.
+	tools := map[string]mcp.Tool{}
+	for _, tl := range agent.Tools(agent.ToolDeps{Gates: gs, Principal: func(context.Context, uuid.UUID) (*domain.Principal, error) { return user, nil }}) {
+		tools[tl.Name] = tl
+	}
+	call := func(g mcp.Grant, name string, args map[string]any) (string, error) {
+		raw, _ := json.Marshal(args)
+		return tools[name].Handler(ctx, g, raw)
+	}
+	personal := mcp.Grant{Mode: mcp.ModeNabu, UserID: user.UserID}
+	out, err := call(personal, "list_gate_files", map[string]any{"uniqueId": f.UniqueID, "area": "design"})
+	if err != nil || !strings.Contains(out, "mockups.html\ttext/html") || strings.Contains(out, "spec.md") {
+		t.Fatalf("list_gate_files %q %v", out, err)
+	}
+	if out, err = call(personal, "read_gate_file", map[string]any{"uniqueId": f.UniqueID, "area": "design", "name": "mockups.html"}); err != nil ||
+		!strings.Contains(out, "<title>m</title>") {
+		t.Fatalf("read_gate_file %q %v", out, err)
+	}
+	var te *mcp.ToolError
+	for _, c := range []struct {
+		g    mcp.Grant
+		args map[string]any
+	}{
+		{personal, map[string]any{"uniqueId": f.UniqueID, "area": "design", "name": "flow.png"}},           // not text
+		{personal, map[string]any{"uniqueId": f.UniqueID, "area": "design", "name": "big.html"}},           // over the limit
+		{personal, map[string]any{"uniqueId": f.UniqueID, "area": "design", "name": "../product/spec.md"}}, // a path
+		{mcp.Grant{Mode: mcp.ModeTask, Feature: "FTR.FMS.CAR-0001", UserID: user.UserID}, map[string]any{"uniqueId": f.UniqueID, "area": "design", "name": "mockups.html"}},
+	} {
+		if _, err := call(c.g, "read_gate_file", c.args); !errors.As(err, &te) {
+			t.Fatalf("read_gate_file %v: %v", c.args, err)
+		}
 	}
 
 	// DRAFT-01, DRAFT-02: the links of the feature in work from its branch, by layer, with the state of the gate.
