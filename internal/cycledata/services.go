@@ -382,6 +382,12 @@ func (d *DB) SetPRHead(ctx context.Context, id uuid.UUID, sha string) error {
 	return err
 }
 
+// SetPRTitle keeps the title of the PR as the provider has it (FTR.HMR.DEV-0004 R2).
+func (d *DB) SetPRTitle(ctx context.Context, id uuid.UUID, title string) error {
+	_, err := d.q.Exec(ctx, `UPDATE pull_requests SET title = $2 WHERE id = $1`, id, title)
+	return err
+}
+
 // SetPRReview sets the review state.
 func (d *DB) SetPRReview(ctx context.Context, id uuid.UUID, review string) error {
 	_, err := d.q.Exec(ctx, `UPDATE pull_requests SET review = $2::pr_review WHERE id = $1`, id, review)
