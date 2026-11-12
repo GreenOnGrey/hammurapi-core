@@ -42,19 +42,19 @@ func depsWarning(ws []string) string {
 	return ""
 }
 
-// FTR.HMR.DEV-0004 qa DEP-01…DEP-04: what counts as a change of the dependencies.
+// FTR.HMR.DEV-0004 qa DPN-01…DPN-04: what counts as a change of the dependencies.
 func TestDependencyChanges(t *testing.T) {
 	cases := []struct {
 		name string
 		ops  map[string]string
 		want string
 	}{
-		{"DEP-01", map[string]string{"go.mod": "modified", "third_party/klauspost-compress/s2/s2.go": "added", "vendor/x/y.go": "added", "a.go": "modified"},
+		{"DPN-01", map[string]string{"go.mod": "modified", "third_party/klauspost-compress/s2/s2.go": "added", "vendor/x/y.go": "added", "a.go": "modified"},
 			"go.mod, third_party/klauspost-compress/s2/s2.go, vendor/x/y.go"},
-		{"DEP-02", map[string]string{"web/package-lock.json": "modified", "requirements-dev.txt": "modified", "uv.lock": "added"},
+		{"DPN-02", map[string]string{"web/package-lock.json": "modified", "requirements-dev.txt": "modified", "uv.lock": "added"},
 			"requirements-dev.txt, uv.lock, web/package-lock.json"},
-		{"DEP-03", map[string]string{"third_party/kept.go": "modified", "internal/vendor.go": "added"}, ""},
-		{"DEP-04", map[string]string{"go.mod": "modified", "go.sum": "modified", "package.json": "modified", "yarn.lock": "modified",
+		{"DPN-03", map[string]string{"third_party/kept.go": "modified", "internal/vendor.go": "added"}, ""},
+		{"DPN-04", map[string]string{"go.mod": "modified", "go.sum": "modified", "package.json": "modified", "yarn.lock": "modified",
 			"poetry.lock": "modified", "pyproject.toml": "modified", "pnpm-lock.yaml": "modified"},
 			"go.mod, go.sum, package.json, pnpm-lock.yaml, poetry.lock and 2 more"},
 	}
@@ -72,21 +72,21 @@ func TestDependencyChanges(t *testing.T) {
 	}
 }
 
-// DEP-05: changed dependencies need a person even when the check passed; the warning opens the PR.
+// DPN-05: changed dependencies need a person even when the check passed; the warning opens the PR.
 func TestDependenciesNeedReview(t *testing.T) {
 	r := Result{Check: &nabu.CheckResult{Status: CheckPassed}, Warnings: []string{warningProtected + "a_test.go", warningDependencies + "go.mod"}}
 	if !r.needsReview() {
-		t.Fatal("DEP-05 no review")
+		t.Fatal("DPN-05 no review")
 	}
 	if w := checkWarnings(r); !strings.HasPrefix(w, "⚠️ "+warningDependencies+"go.mod") || !strings.Contains(w, warningProtected) {
-		t.Fatalf("DEP-05 warning %q", w)
+		t.Fatalf("DPN-05 warning %q", w)
 	}
 	if (Result{Check: &nabu.CheckResult{Status: CheckPassed}}).needsReview() {
 		t.Fatal("no dependencies, a passed check — no review")
 	}
 }
 
-// DEP-07: the instruction of the agent on dependencies.
+// DPN-07: the instruction of the agent on dependencies.
 func TestPromptDependencies(t *testing.T) {
 	p := Prompt(commitDescription())
 	for _, want := range []string{"no `replace` to a local path", "`file:` or `link:`", "third_party/", "name it in the summary"} {
