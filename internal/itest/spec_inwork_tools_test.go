@@ -150,6 +150,32 @@ func TestSpecToolsFeatureInWork(t *testing.T) {
 	if !strings.Contains(r["markdown"].(string), "Тарифы праздников") {
 		t.Fatalf("SPB-09 a new revision is read: %q", r["markdown"])
 	}
+	// FTR.HMR.SPEC-0005 qa TCS-04, TCS-05: the column «Сервисы» of qa names only the services of arch, or of tech without arch.
+	qa := "## Тест-кейсы\n\n| ID | Требования | Сервисы | Сценарий | Ожидаемый результат | Ур. |\n|---|---|---|---|---|---|\n" +
+		"| `TAR-01` | R4 | `booking`, `billing` | Отмена | Платно | I |\n| `TAR-02` | R4 |  | Отмена | Бесплатно | I |\n"
+	if msg, err := svc.QAServiceRefusal(ctx, "FTR.FMS.CAR-0042", qa); err != nil || msg != "" {
+		t.Fatalf("without a table of services there is nothing to check: %q %v", msg, err)
+	}
+	repo.set(nf.Branch, pathTariffsArch, "# Тарифы — архитектура\n\n## Затрагиваемые сервисы и контракты\n\n| Сервис | Роль | Контракты |\n|---|---|---|\n"+
+		"| `booking` | Возврат | — |\n| `pricing` | Скидка | — |\n\n## Принятые решения\n\n| A | Решение | Обоснование |\n|---|---|---|\n| A1 | x | y |\n")
+	_, err = db.Exec(ctx, `UPDATE gates SET head_commit = 'h3' WHERE feature_id = $1 AND area = 'arch'`, nf.ID)
+	must(t, err)
+	msg, err := svc.QAServiceRefusal(ctx, "FTR.FMS.CAR-0042", qa)
+	must(t, err)
+	if !strings.HasPrefix(msg, "qa_unknown_service: billing") || !strings.Contains(msg, "booking, pricing") {
+		t.Fatalf("TCS-04: %q", msg)
+	}
+	if msg, err := svc.QAServiceRefusal(ctx, "FTR.FMS.CAR-0042", strings.Replace(qa, ", `billing`", "", 1)); err != nil || msg != "" {
+		t.Fatalf("TCS-04 known services: %q %v", msg, err)
+	}
+	// TCS-05: arch skipped — the table of tech names the services
+	_, err = db.Exec(ctx, `UPDATE features SET skipped_areas = '{arch}' WHERE id = $1`, nf.ID)
+	must(t, err)
+	repo.set(nf.Branch, "specs/FMS/CAR/FTR.FMS.CAR-0042/tech/spec.md", "# Тарифы — техспека\n\n## Изменения по сервисам\n\n| Сервис | Репозиторий | Что меняется | Требования |\n|---|---|---|---|\n"+
+		"| `booking` | o/b | x | R4 |\n| `billing` | o/c | y | R4 |\n")
+	if msg, err := svc.QAServiceRefusal(ctx, "FTR.FMS.CAR-0042", qa); err != nil || msg != "" {
+		t.Fatalf("TCS-05: %q %v", msg, err)
+	}
 	// A released feature is not read from its branch.
 	_, err = db.Exec(ctx, `UPDATE features SET phase = 'released' WHERE id = $1`, nf.ID)
 	must(t, err)

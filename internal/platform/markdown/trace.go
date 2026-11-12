@@ -2,6 +2,7 @@ package markdown
 
 import (
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,6 +25,8 @@ type TC struct {
 	Level  string
 	ReqIDs []string
 	Title  string
+	// Services are the keys of the column «Сервисы» (FTR.HMR.SPEC-0005 R1); empty — every service of the feature.
+	Services []string
 }
 
 // ServiceReqs is a row of the tech spec's service table.
@@ -258,6 +261,7 @@ func ParseTestCases(doc string) []TC {
 		reqCol := col(t.header, "требован", "requirement", "anforderung", "requisito", "需求")
 		lvlCol := col(t.header, "ур", "level", "ebene", "nivel", "级别")
 		titleCol := col(t.header, "сценарий", "scenario", "szenario", "escenario", "场景")
+		svcCol := col(t.header, "сервис", "service", "dienst", "servicio", "服务")
 		if reqCol < 0 {
 			continue
 		}
@@ -271,7 +275,7 @@ func ParseTestCases(doc string) []TC {
 			if reqs == nil {
 				reqs = []string{}
 			}
-			out = append(out, TC{ID: id, Level: strings.Trim(cell(r, lvlCol), "` "), ReqIDs: reqs, Title: cell(r, titleCol)})
+			out = append(out, TC{ID: id, Level: strings.Trim(cell(r, lvlCol), "` "), ReqIDs: reqs, Title: cell(r, titleCol), Services: ParseServiceKeys(cell(r, svcCol))})
 		}
 	}
 	return out
@@ -428,4 +432,19 @@ func FillSection(doc, fallback, content string, titles ...string) string {
 		}
 	}
 	return strings.TrimRight(doc, "\n") + "\n\n## " + fallback + "\n\n" + strings.TrimRight(content, "\n") + "\n"
+}
+
+var serviceKeyRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
+
+// ParseServiceKeys reads the keys of a cell of the column «Сервисы»: «`nabu-core`, `nabu-web`»;
+// an empty cell, «—» or words are no keys (FTR.HMR.SPEC-0005 R1).
+func ParseServiceKeys(cell string) []string {
+	var out []string
+	for _, part := range strings.Split(cell, ",") {
+		k := strings.Trim(strings.TrimSpace(part), "`* ")
+		if serviceKeyRe.MatchString(k) && !slices.Contains(out, k) {
+			out = append(out, k)
+		}
+	}
+	return out
 }

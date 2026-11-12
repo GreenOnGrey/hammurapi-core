@@ -204,6 +204,25 @@ func TestCICheck(t *testing.T) {
 	if !required["released"] || !required["codegen"] || required["spec"] || required["rolled_back"] {
 		t.Fatalf("SVC-07: %v", required)
 	}
+	// FTR.HMR.SPEC-0005 qa TCS-02, TCS-03: a case marked with another service is left out; a case without services stays
+	_, err = pool.Exec(ctx, `INSERT INTO test_cases (feature_id, tc_id, level, req_ids, services)
+		SELECT f.id, x.id, 'I', '{R1}', x.s FROM features f,
+		(VALUES ('MIG-01', '{pricing}'::text[]), ('TCS-10', '{booking,pricing}'::text[])) AS x(id, s) WHERE f.unique_id = 'FTR.FMS.CAR-0002'`)
+	must(t, err)
+	code, body = get("booking", job("fms/booking"))
+	ids := map[string][]any{}
+	for _, c := range body["cases"].([]any) {
+		m := c.(map[string]any)
+		ids[m["id"].(string)], _ = m["services"].([]any)
+	}
+	if code != 200 || len(ids) != 5 || ids["TCS-10"] == nil || ids["BOOK-02"] == nil || len(ids["BOOK-02"]) != 0 {
+		t.Fatalf("TCS-02, TCS-03: %d %v", code, ids)
+	}
+	if _, ok := ids["MIG-01"]; ok {
+		t.Fatalf("TCS-02: the case of pricing is given to booking: %v", ids)
+	}
+	_, err = pool.Exec(ctx, `DELETE FROM test_cases WHERE tc_id IN ('MIG-01', 'TCS-10')`)
+	must(t, err)
 	// SCOPE-02: the other service of the same repository
 	if code, _ = get("booking-admin", job("fms/booking")); code != 200 {
 		t.Fatalf("SCOPE-02: %d", code)

@@ -608,6 +608,8 @@ type TestCaseRef struct {
 	ID    string `json:"id"`
 	Level string `json:"level"`
 	Title string `json:"title"`
+	// Services: the services the case is marked with, empty — every one (FTR.HMR.SPEC-0005 R6).
+	Services []string `json:"services"`
 }
 
 // RequirementPRRef is a PR closing a requirement.
@@ -651,7 +653,11 @@ func Matrix(ctx context.Context, cd *cycledata.DB, featureID uuid.UUID) ([]Requi
 		for _, tc := range tcs {
 			for _, id := range tc.ReqIDs {
 				if id == r.ID {
-					row.TestCases = append(row.TestCases, TestCaseRef{ID: tc.ID, Level: tc.Level, Title: tc.Title})
+					svcs := tc.Services
+					if svcs == nil {
+						svcs = []string{}
+					}
+					row.TestCases = append(row.TestCases, TestCaseRef{ID: tc.ID, Level: tc.Level, Title: tc.Title, Services: svcs})
 					break
 				}
 			}

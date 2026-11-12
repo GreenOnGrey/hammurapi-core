@@ -9,10 +9,14 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/GreenOnGrey/speclint/v2/contract"
+
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/git"
+	"github.com/GreenOnGrey/hammurapi-core/internal/platform/markdown"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/mcp"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/metrics"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/postgres"
@@ -273,4 +277,60 @@ func (s *Service) fillRefs(ctx context.Context, refs []LinkRef) error {
 // countSource counts an answer of a spec tool by its source (SPEC-0006 arch §8).
 func countSource(tool, source string) {
 	metrics.SpecToolCalls.WithLabelValues(tool, source).Inc()
+}
+
+// QAServiceRefusal checks the column «Сервисы» of a qa a writer submits against
+// the services of the feature: the table of arch of its branch, or of tech when
+// arch is skipped (FTR.HMR.SPEC-0005 R2). "" — the document may be taken. Without
+// a table of services in the branch there is nothing to check against.
+func (s *Service) QAServiceRefusal(ctx context.Context, featureKey, qa string) (string, error) {
+	var used []string
+	for _, tc := range markdown.ParseTestCases(qa) {
+		for _, k := range tc.Services {
+			if !slices.Contains(used, k) {
+				used = append(used, k)
+			}
+		}
+	}
+	if len(used) == 0 {
+		return "", nil
+	}
+	f, err := s.featureInWork(ctx, featureKey)
+	if errors.Is(err, errNotInWork) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	var known []string
+	for _, area := range []string{"arch", "tech"} {
+		md, err := s.branchDocument(ctx, f, area)
+		if err != nil {
+			return "", err
+		}
+		if md == "" {
+			continue
+		}
+		d := contract.Parse(md, contract.Area(area))
+		for _, sv := range d.Services {
+			known = append(known, sv.Key)
+		}
+		if d.HasServices {
+			break
+		}
+	}
+	if len(known) == 0 {
+		return "", nil
+	}
+	var bad []string
+	for _, k := range used {
+		if !slices.Contains(known, k) {
+			bad = append(bad, k)
+		}
+	}
+	if len(bad) == 0 {
+		return "", nil
+	}
+	return fmt.Sprintf("qa_unknown_service: %s — not among the services of the feature (%s); the column «Сервисы» names keys of the table of services of arch",
+		strings.Join(bad, ", "), strings.Join(known, ", ")), nil
 }

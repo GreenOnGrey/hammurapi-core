@@ -287,8 +287,10 @@ func (c *core) slices() *slices {
 func (c *core) toolDeps(s *slices, loadPrincipal agent.PrincipalLoader) agent.ToolDeps {
 	return agent.ToolDeps{Store: c.store, Git: c.provider, Tokens: c.authSvc, Gates: s.gates, Principal: loadPrincipal,
 		// FTR.HMR.DEV-0002 R3: the writer gets the reasons of wrong rows of the section
-		CheckChanges:  s.changes.Refusal,
-		DefaultBranch: c.cfg.GitDefaultBranch, TestMetric: s.metrics.Test,
+		CheckChanges: s.changes.Refusal,
+		// FTR.HMR.SPEC-0005 R2: the writer gets the services the column «Сервисы» may name
+		CheckQAServices: s.spec.QAServiceRefusal,
+		DefaultBranch:   c.cfg.GitDefaultBranch, TestMetric: s.metrics.Test,
 		// FTR.HMR.DISC-0001: instructions to the researcher, the basis and the check of the estimate
 		RequestRevision: func(ctx context.Context, p *domain.Principal, g mcp.Grant, key string, brief agent.RevisionBrief) (string, error) {
 			r, err := discovery.RequestRevision(ctx, c.pool, discovery.Channel(c.cfg.NabuClientName), p, g, key, brief)

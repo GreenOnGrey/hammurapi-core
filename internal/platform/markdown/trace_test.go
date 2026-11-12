@@ -75,6 +75,28 @@ func TestParseTestCases(t *testing.T) {
 	}
 }
 
+// FTR.HMR.SPEC-0005 qa TCS-01: the column «Сервисы» of the test cases.
+func TestParseTestCaseServices(t *testing.T) {
+	doc := "| ID | Требования | Сервисы | Сценарий | Ожидаемый результат | Ур. |\n|---|---|---|---|---|---|\n" +
+		"| `MIG-01` | R1 | `nabu-core` | Миграция | Колонки | I |\n" +
+		"| `TCS-10` | R2 |  | Экран | Видно | E |\n" +
+		"| `CTR-01` | R3 | `nabu-core`, `nabu-web` | Контракт | Схемы | I |\n" +
+		"| `TCS-11` | R4 | — | Стенд | 5 с | M |\n"
+	got := ParseTestCases(doc)
+	want := [][]string{{"nabu-core"}, nil, {"nabu-core", "nabu-web"}, nil}
+	if len(got) != 4 {
+		t.Fatalf("got %+v", got)
+	}
+	for i, w := range want {
+		if !reflect.DeepEqual(got[i].Services, w) {
+			t.Fatalf("%s: services %v, want %v", got[i].ID, got[i].Services, w)
+		}
+	}
+	if got[0].Title != "Миграция" || got[0].Level != "I" {
+		t.Fatalf("the other columns: %+v", got[0])
+	}
+}
+
 func TestParseTechServices(t *testing.T) {
 	doc := "## Изменения по сервисам\n\n| Сервис | Требования | Изменения |\n|---|---|---|\n| `booking` | R1, R2 | API |\n| pricing | R2 | правила |\n"
 	got := ParseTechServices(doc)

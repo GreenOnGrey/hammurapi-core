@@ -245,8 +245,12 @@ func (d *DB) ReplaceTestCases(ctx context.Context, featureID uuid.UUID, tcs []Te
 		if reqs == nil {
 			reqs = []string{}
 		}
-		if _, err := d.q.Exec(ctx, `INSERT INTO test_cases (feature_id, tc_id, level, req_ids, title) VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`,
-			featureID, t.ID, t.Level, reqs, t.Title); err != nil {
+		svcs := t.Services
+		if svcs == nil {
+			svcs = []string{}
+		}
+		if _, err := d.q.Exec(ctx, `INSERT INTO test_cases (feature_id, tc_id, level, req_ids, title, services) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`,
+			featureID, t.ID, t.Level, reqs, t.Title, svcs); err != nil {
 			return err
 		}
 	}
@@ -277,7 +281,7 @@ func (d *DB) Requirements(ctx context.Context, featureID uuid.UUID) ([]Requireme
 
 // TestCases lists test cases.
 func (d *DB) TestCases(ctx context.Context, featureID uuid.UUID) ([]TestCase, error) {
-	rows, err := d.q.Query(ctx, `SELECT tc_id, level, req_ids, title FROM test_cases WHERE feature_id = $1 ORDER BY tc_id`, featureID)
+	rows, err := d.q.Query(ctx, `SELECT tc_id, level, req_ids, title, services FROM test_cases WHERE feature_id = $1 ORDER BY tc_id`, featureID)
 	if err != nil {
 		return nil, err
 	}
@@ -285,7 +289,7 @@ func (d *DB) TestCases(ctx context.Context, featureID uuid.UUID) ([]TestCase, er
 	out := []TestCase{}
 	for rows.Next() {
 		var t TestCase
-		if err := rows.Scan(&t.ID, &t.Level, &t.ReqIDs, &t.Title); err != nil {
+		if err := rows.Scan(&t.ID, &t.Level, &t.ReqIDs, &t.Title, &t.Services); err != nil {
 			return nil, err
 		}
 		out = append(out, t)

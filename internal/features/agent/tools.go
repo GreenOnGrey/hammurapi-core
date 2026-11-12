@@ -66,13 +66,15 @@ const DiscoveryRule = "\n--- How Discovery is revised ---\n" +
 type ToolDeps struct {
 	// CheckChanges checks the section «Изменения в других решениях» of a product
 	// document the writer submits (FTR.HMR.DEV-0002 R3): the reasons of the wrong rows, "" — none.
-	CheckChanges  func(ctx context.Context, featureKey, area, doc string) (string, error)
-	Store         specdata.Store
-	Git           git.Provider
-	Tokens        git.TokenSource
-	Gates         *gates.Service
-	Principal     PrincipalLoader
-	DefaultBranch string
+	CheckChanges func(ctx context.Context, featureKey, area, doc string) (string, error)
+	// CheckQAServices refuses a qa whose column «Сервисы» names a service the feature does not have (FTR.HMR.SPEC-0005 R2).
+	CheckQAServices func(ctx context.Context, featureKey, doc string) (string, error)
+	Store           specdata.Store
+	Git             git.Provider
+	Tokens          git.TokenSource
+	Gates           *gates.Service
+	Principal       PrincipalLoader
+	DefaultBranch   string
 	// RequestRevision gives the brief of an expert to the researcher
 	// (FTR.HMR.DISC-0001 R7, R28, tech §4.2) and returns the answer for the agent.
 	RequestRevision func(ctx context.Context, p *domain.Principal, g mcp.Grant, issueKey string, b RevisionBrief) (string, error)
@@ -818,6 +820,15 @@ func Tools(d ToolDeps) []mcp.Tool {
 				if json.Unmarshal(raw, &in) == nil && in.Content != "" {
 					if in.Area == domain.AreaArch {
 						if msg := ArchViolations(in.Content); msg != "" { // FTR.HMR.DEV-0003 R21
+							return "", &mcp.ToolError{Msg: msg}
+						}
+					}
+					if in.Area == domain.AreaQA && d.CheckQAServices != nil {
+						msg, err := d.CheckQAServices(ctx, g.Feature, in.Content)
+						if err != nil {
+							return "", err
+						}
+						if msg != "" { // the revision is not taken
 							return "", &mcp.ToolError{Msg: msg}
 						}
 					}
