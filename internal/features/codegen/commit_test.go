@@ -51,6 +51,18 @@ func TestCommitRetriesNotFoundOnNewBranch(t *testing.T) {
 	if res.PRTitle != "FTR.FMS.CAR-0005 booking: Usage" {
 		t.Fatalf("PR title: %q", res.PRTitle)
 	}
+	// FTR.HMR.DEV-0004 qa LOG-03: the steps of Hammurapi for the log, the head of the branch for a retry
+	if got := stepsOf(res); got != "branch:ok commit:ok pr:ok" || res.BranchHead != "c1" {
+		t.Fatalf("steps %s, head %s", got, res.BranchHead)
+	}
+}
+
+func stepsOf(r Result) string {
+	var b []string
+	for _, s := range r.Steps {
+		b = append(b, s.Step+":"+s.Status)
+	}
+	return strings.Join(b, " ")
 }
 
 // FTR.HMR.DEV-0004 qa GIT-02: on an existing branch a 404 is not a lag; the error names the branch and the answer.
@@ -76,6 +88,9 @@ func TestCommitNotFoundOnExistingBranch(t *testing.T) {
 	}
 	if strings.Contains(res.Error, "git: not found") {
 		t.Fatalf("error reads as a missing binary: %q", res.Error)
+	}
+	if got := stepsOf(res); got != "branch:ok commit:failed" || res.BranchHead != "head" || !strings.Contains(res.Steps[1].Detail, "create the tree") {
+		t.Fatalf("LOG-03 steps %s, head %s", got, res.BranchHead)
 	}
 }
 

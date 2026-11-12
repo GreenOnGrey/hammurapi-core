@@ -132,8 +132,10 @@ func commit(ctx context.Context, p git.Provider, token string, d *Description, r
 		if d.Type == TaskReview && d.Input.PRNumber > 0 {
 			// The agent answered in the discussion instead of changing code.
 			if err := p.CommentPR(ctx, token, d.Input.PRNumber, "Hammurapi agent: "+strings.TrimSpace(text)); err != nil {
+				res.step(StepComment, StepFailed, err.Error())
 				return withErr(res, ClassGit, err)
 			}
+			res.step(StepComment, StepOK, fmt.Sprintf("#%d", d.Input.PRNumber))
 			res.Status, res.PRNumber = "succeeded", d.Input.PRNumber
 			return res
 		}
@@ -149,12 +151,20 @@ func commit(ctx context.Context, p git.Provider, token string, d *Description, r
 	if h, err := p.BranchHead(ctx, token, d.Branch); err != nil || h == "" {
 		head, err := p.BranchHead(ctx, token, base)
 		if err != nil {
+			res.step(StepBranch, StepFailed, err.Error())
 			return withErr(res, ClassGit, err)
 		}
 		if err := p.CreateBranch(ctx, token, d.Branch, head); err != nil {
-			return withErr(res, ClassGit, fmt.Errorf("create branch: %w", err))
+			err = fmt.Errorf("create branch: %w", err)
+			res.step(StepBranch, StepFailed, err.Error())
+			return withErr(res, ClassGit, err)
 		}
 		created = true
+		res.BranchHead = head
+		res.step(StepBranch, StepOK, "created "+d.Branch)
+	} else {
+		res.BranchHead = h
+		res.step(StepBranch, StepOK, d.Branch)
 	}
 	msg := git.Trailers{Feature: d.Feature, Req: res.Requirements, Agent: true, Initiator: d.Initiator, Task: d.ID.String(), Release: d.Release}.
 		Message(commitSubject(d))
@@ -170,18 +180,24 @@ func commit(ctx context.Context, p git.Provider, token string, d *Description, r
 		sha, err = p.Commit(ctx, token, d.Branch, msg, changes)
 	}
 	if err != nil {
-		return withErr(res, ClassGit, fmt.Errorf("commit to %s: %w", d.Branch, err))
+		err = fmt.Errorf("commit to %s: %w", d.Branch, err)
+		res.step(StepCommit, StepFailed, err.Error())
+		return withErr(res, ClassGit, err)
 	}
-	res.Branch, res.HeadSHA = d.Branch, sha
+	res.Branch, res.HeadSHA, res.BranchHead = d.Branch, sha, sha
+	res.step(StepCommit, StepOK, fmt.Sprintf("%s · %d files", shortSHA(sha), len(changes)))
 	number := d.Input.PRNumber
 	if number == 0 {
 		title := fmt.Sprintf("%s %s: %s", d.Feature, d.Service, d.FeatureTitle)
 		pr, err := p.CreatePR(ctx, token, d.Branch, base, title, prBody(d, res))
 		if err != nil {
-			return withErr(res, ClassGit, fmt.Errorf("create PR: %w", err))
+			err = fmt.Errorf("create PR: %w", err)
+			res.step(StepPR, StepFailed, err.Error())
+			return withErr(res, ClassGit, err)
 		}
 		// FTR.HMR.DEV-0004 R2: the row of the PR shows its title, not the answer of the agent.
 		number, res.PRURL, res.PRTitle = pr.Number, pr.URL, title
+		res.step(StepPR, StepOK, fmt.Sprintf("created #%d", number))
 		if d.Autonomy == "pr" && len(d.Reviewers) > 0 {
 			if err := p.RequestReview(ctx, token, number, d.Reviewers); err != nil {
 				slog.Warn("request review failed", "err", err)
@@ -191,6 +207,7 @@ func commit(ctx context.Context, p git.Provider, token string, d *Description, r
 		if pr, err := p.GetPR(ctx, token, number); err == nil {
 			res.PRURL = pr.URL
 		}
+		res.step(StepPR, StepOK, fmt.Sprintf("updated #%d", number))
 		if d.Type == TaskReview {
 			_ = p.CommentPR(ctx, token, number, "Hammurapi agent addressed the review: "+strings.TrimSpace(text))
 		}
@@ -204,6 +221,37 @@ func commit(ctx context.Context, p git.Provider, token string, d *Description, r
 	res.PRNumber = number
 	res.Status = "succeeded"
 	return res
+}
+
+// Steps of Hammurapi after the agent (FTR.HMR.DEV-0004 R8, arch §4.3): the log of the task shows them after the run.
+const (
+	StepBranch  = "branch"
+	StepCommit  = "commit"
+	StepPR      = "pr"
+	StepComment = "comment"
+	StepOK      = "ok"
+	StepFailed  = "failed"
+)
+
+// Step is one step of Hammurapi after the agent.
+type Step struct {
+	Step   string    `json:"step"`
+	Status string    `json:"status"`
+	Detail string    `json:"detail,omitempty"`
+	At     time.Time `json:"at"`
+	// Retry: the step of «Повторить коммит» (R12), without a new run of the agent.
+	Retry bool `json:"retry,omitempty"`
+}
+
+func (r *Result) step(name, status, detail string) {
+	r.Steps = append(r.Steps, Step{Step: name, Status: status, Detail: detail, At: time.Now().UTC()})
+}
+
+func shortSHA(s string) string {
+	if len(s) > 7 {
+		return s[:7]
+	}
+	return s
 }
 
 // newBranchRetries are the pauses before the commit is retried after a 404 on
