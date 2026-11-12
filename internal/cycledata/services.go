@@ -314,7 +314,11 @@ func scanPR(row interface{ Scan(...any) error }) (*PR, error) {
 }
 
 func (d *DB) prs(ctx context.Context, where string, args ...any) ([]PR, error) {
-	rows, err := d.q.Query(ctx, `SELECT `+prCols+prFrom+` WHERE `+where+` ORDER BY p.created_at`, args...)
+	return d.queryPRs(ctx, `SELECT `+prCols+prFrom+` WHERE `+where+` ORDER BY p.created_at`, args...)
+}
+
+func (d *DB) queryPRs(ctx context.Context, sql string, args ...any) ([]PR, error) {
+	rows, err := d.q.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -396,6 +400,42 @@ func (d *DB) SetPRTitle(ctx context.Context, id uuid.UUID, title string) error {
 // SetPRReview sets the review state.
 func (d *DB) SetPRReview(ctx context.Context, id uuid.UUID, review string) error {
 	_, err := d.q.Exec(ctx, `UPDATE pull_requests SET review = $2::pr_review WHERE id = $1`, id, review)
+	return err
+}
+
+// OpenPRs lists open PRs of services and reverts, those compared with the provider longest ago
+// first: the sync of FTR.HMR.DEV-0004 R17 goes round all of them, a batch at a time.
+func (d *DB) OpenPRs(ctx context.Context, limit int) ([]PR, error) {
+	return d.queryPRs(ctx, `SELECT `+prCols+prFrom+` WHERE p.state = 'open' AND p.kind <> 'spec'
+		ORDER BY p.synced_at NULLS FIRST, p.created_at LIMIT $1`, limit)
+}
+
+// MarkPRSynced records that the sync compared the PR with the provider.
+func (d *DB) MarkPRSynced(ctx context.Context, id uuid.UUID) error {
+	_, err := d.q.Exec(ctx, `UPDATE pull_requests SET synced_at = now() WHERE id = $1`, id)
+	return err
+}
+
+// MovePRHead moves the head of a PR only from the head it was read with: a push that came in
+// between wins (FTR.HMR.DEV-0004 R17). It clears the CI status of the old head. false — moved already.
+func (d *DB) MovePRHead(ctx context.Context, id uuid.UUID, from, to string) (bool, error) {
+	tag, err := d.q.Exec(ctx, `UPDATE pull_requests SET head_sha = $3, ci_status = NULL WHERE id = $1 AND head_sha = $2`, id, from, to)
+	return tag.RowsAffected() == 1, err
+}
+
+// SetPRHeadCI sets the CI status of a PR only while its head is the commit the status is of.
+// false — the head moved on, or the status was already so.
+func (d *DB) SetPRHeadCI(ctx context.Context, id uuid.UUID, head, status string) (bool, error) {
+	tag, err := d.q.Exec(ctx, `UPDATE pull_requests SET ci_status = $3
+		WHERE id = $1 AND head_sha = $2 AND ci_status IS DISTINCT FROM $3`, id, head, status)
+	return tag.RowsAffected() == 1, err
+}
+
+// SetPRCIFromReport sets the CI status from a JUnit report of the CI of a service: only while the
+// provider has not found checks of the head (FTR.HMR.DEV-0004 R17, tech decision 11).
+func (d *DB) SetPRCIFromReport(ctx context.Context, id uuid.UUID, head, status string) error {
+	_, err := d.q.Exec(ctx, `UPDATE pull_requests SET ci_status = $3
+		WHERE id = $1 AND head_sha = $2 AND (ci_status IS NULL OR ci_status = 'none')`, id, head, status)
 	return err
 }
 

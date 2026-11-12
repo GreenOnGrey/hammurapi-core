@@ -121,7 +121,7 @@ func TestMigrationsFromMVP(t *testing.T) {
 	must(t, goose.UpContext(context.Background(), db, "."))
 	after, err := goose.GetDBVersion(db)
 	must(t, err)
-	if before != after || before != 32 {
+	if before != after || before != 33 {
 		t.Fatalf("version %d → %d", before, after)
 	}
 }

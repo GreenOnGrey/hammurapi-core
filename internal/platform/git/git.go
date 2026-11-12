@@ -131,10 +131,11 @@ type ReviewEvent struct {
 
 // HookEvent is any webhook Hammurapi understands.
 type HookEvent struct {
-	Kind   string       `json:"kind"` // push | tag | pr | review
+	Kind   string       `json:"kind"` // push | tag | pr | review | ci
 	Push   *PushEvent   `json:"push,omitempty"`
 	PR     *PREvent     `json:"pr,omitempty"`
 	Review *ReviewEvent `json:"review,omitempty"`
+	CI     *CIEvent     `json:"ci,omitempty"`
 }
 
 // PRInfo is the current state of a PR/MR.
@@ -198,7 +199,10 @@ type Provider interface {
 
 	VerifyWebhook(h http.Header, body []byte, secret string) bool
 	ParsePush(h http.Header, body []byte) (*PushEvent, bool, error)
-	// ParseHook normalizes push, tag, PR/MR, review and comment webhooks; nil for others.
+	// CommitCI is the status of the checks of a commit: success, failure, pending or none
+	// (FTR.HMR.DEV-0004 R17).
+	CommitCI(ctx context.Context, token, sha string) (string, error)
+	// ParseHook normalizes push, tag, PR/MR, review, comment and check webhooks; nil for others.
 	ParseHook(h http.Header, body []byte) (*HookEvent, error)
 
 	// ─── FTR.HMR.CMN-0002: service repositories, bot, CI/CD ───

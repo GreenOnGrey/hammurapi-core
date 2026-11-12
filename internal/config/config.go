@@ -137,6 +137,8 @@ type Config struct {
 	RunLogRetention      time.Duration
 	// CodegenChangesKeep: how long the changes of an agent are kept for «Повторить коммит» (FTR.HMR.DEV-0004 R13).
 	CodegenChangesKeep time.Duration
+	// PRSyncInterval: how often the worker compares open PRs with the git provider (FTR.HMR.DEV-0004 R17); 0 — never.
+	PRSyncInterval time.Duration
 
 	// FTR.HMR.CMN-0005: the check of the specification repository and the navigator.
 	SpecScanPushDebounce    time.Duration
@@ -252,6 +254,9 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if c.CodegenChangesKeep, err = envDuration("CODEGEN_CHANGES_KEEP", 14*24*time.Hour); err != nil {
+		return nil, err
+	}
+	if c.PRSyncInterval, err = envDuration("PR_SYNC_INTERVAL", 5*time.Minute); err != nil {
 		return nil, err
 	}
 	if c.DiscoveryTimeout, err = envDuration("DISCOVERY_TIMEOUT", 20*time.Minute); err != nil {
