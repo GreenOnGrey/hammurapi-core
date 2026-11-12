@@ -233,6 +233,27 @@ type Task struct {
 	// FTR.HMR.CMN-0007 R11: the class of the error and the run of Nabu.
 	ErrorClass *string `json:"errorClass"`
 	NabuRunID  *string `json:"nabuRunId"`
+	// FTR.HMR.DEV-0004 R12–R14: the archive of the changes of the agent and
+	// what «Повторить» does: agent — a new run, commit — the steps of
+	// Hammurapi from the archive, rerun — a new run after the branch moved.
+	ChangesKey   *string    `json:"-"`
+	ChangesUntil *time.Time `json:"-"`
+	Retry        string     `json:"retry"`
+}
+
+// RetryOf is what «Повторить» of a task does now (FTR.HMR.DEV-0004 arch §4.5).
+func (t *Task) RetryOf(now time.Time) string {
+	class := ""
+	if t.ErrorClass != nil {
+		class = *t.ErrorClass
+	}
+	switch {
+	case t.Status == "failed" && class == "git" && t.ChangesKey != nil && t.ChangesUntil != nil && now.Before(*t.ChangesUntil):
+		return "commit"
+	case t.Status == "failed" && class == "branch_moved":
+		return "rerun"
+	}
+	return "agent"
 }
 
 // Release is a release (RLS).

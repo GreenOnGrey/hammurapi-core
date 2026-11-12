@@ -135,6 +135,8 @@ type Config struct {
 	RunLogStreamsPerUser int
 	RunLogStreamsMax     int
 	RunLogRetention      time.Duration
+	// CodegenChangesKeep: how long the changes of an agent are kept for «Повторить коммит» (FTR.HMR.DEV-0004 R13).
+	CodegenChangesKeep time.Duration
 
 	// FTR.HMR.CMN-0005: the check of the specification repository and the navigator.
 	SpecScanPushDebounce    time.Duration
@@ -247,6 +249,9 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if c.RunLogRetention, err = envDuration("RUN_LOG_RETENTION", 30*24*time.Hour); err != nil {
+		return nil, err
+	}
+	if c.CodegenChangesKeep, err = envDuration("CODEGEN_CHANGES_KEEP", 14*24*time.Hour); err != nil {
 		return nil, err
 	}
 	if c.DiscoveryTimeout, err = envDuration("DISCOVERY_TIMEOUT", 20*time.Minute); err != nil {

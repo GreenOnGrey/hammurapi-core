@@ -30,6 +30,7 @@ import (
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/metrics"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/nabu"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/postgres"
+	"github.com/GreenOnGrey/hammurapi-core/internal/platform/storage"
 	"github.com/GreenOnGrey/hammurapi-core/internal/specdata"
 )
 
@@ -46,7 +47,9 @@ const (
 	ClassLimit        = "limit"
 	ClassNoChanges    = "no_changes"
 	ClassGit          = "git"
-	ClassUnbound      = "unbound"
+	// ClassBranchMoved: the branch of the task got commits after the run of the agent (FTR.HMR.DEV-0004 R14).
+	ClassBranchMoved = "branch_moved"
+	ClassUnbound     = "unbound"
 )
 
 // Description is everything a code task needs.
@@ -85,8 +88,9 @@ type Result struct {
 	PRTitle    string `json:"prTitle,omitempty"`
 	// Steps are the steps of Hammurapi after the agent; BranchHead — the head of
 	// the branch of the task after the last of them (FTR.HMR.DEV-0004 R8, R14).
-	Steps        []Step      `json:"steps,omitempty"`
-	BranchHead   string      `json:"branchHead,omitempty"`
+	Steps        []Step `json:"steps,omitempty"`
+	BranchHead   string `json:"branchHead,omitempty"`
+	noUsage      bool
 	Branch       string      `json:"branch,omitempty"`
 	HeadSHA      string      `json:"headSha,omitempty"`
 	Requirements []string    `json:"requirements"`
@@ -140,6 +144,10 @@ type Code struct {
 	TokenKey []byte
 	// CheckMaxRepairs is CODE_CHECK_MAX_REPAIRS (FTR.HMR.CMN-0008 R8).
 	CheckMaxRepairs int
+	// Archives keep the changes of a run for «Повторить коммит», ChangesKeep
+	// is CODEGEN_CHANGES_KEEP (FTR.HMR.DEV-0004 R13); nil — not kept.
+	Archives    storage.Storage
+	ChangesKeep time.Duration
 }
 
 type taskPayload struct {
@@ -385,6 +393,8 @@ type RunFinished struct {
 	// FTR.HMR.CMN-0008 R10, R20.
 	Check      *nabu.CheckResult `json:"check,omitempty"`
 	StopReason string            `json:"stopReason,omitempty"`
+	// RetryCommit: «Повторить коммит» — the steps of Hammurapi from the kept changes, no run of the agent (R12).
+	RetryCommit bool `json:"retryCommit,omitempty"`
 }
 
 // Poll implements code.poll: run_finished when the run of Nabu ended.
@@ -458,6 +468,9 @@ func (c *Code) Apply(ctx context.Context, run workflows.RunRef, payload json.Raw
 	}
 	start := time.Now()
 	defer func() { metrics.CodeApplySeconds.Observe(time.Since(start).Seconds()) }()
+	if f.RetryCommit {
+		return nil, c.retryCommit(ctx, t)
+	}
 	res := Result{Status: "failed", Requirements: []string{}, TestCases: []string{}, Summary: firstLine(f.Summary, 300), Usage: f.Usage,
 		TokensIn: f.Usage.TokensIn + f.Usage.CacheRead, TokensOut: f.Usage.TokensOut}
 	if f.Status != "succeeded" {
@@ -481,7 +494,7 @@ func (c *Code) Apply(ctx context.Context, run workflows.RunRef, payload json.Raw
 	if err != nil {
 		return nil, err
 	}
-	changes, plan, warnings, err := c.changes(ctx, f.RunID)
+	changes, plan, warnings, err := c.changes(ctx, t, f.RunID)
 	if err != nil {
 		return nil, err
 	}
@@ -525,8 +538,10 @@ func (c *Code) finish(ctx context.Context, t *cycledata.Task, res Result) error 
 			t.ID, res.ErrorClass, warnings); err != nil {
 			return err
 		}
-		if err := recordUsage(ctx, tx, t, res); err != nil {
-			return err
+		if !res.noUsage { // a retry of the commit ran no agent (FTR.HMR.DEV-0004 R12)
+			if err := recordUsage(ctx, tx, t, res); err != nil {
+				return err
+			}
 		}
 		if res.PRNumber > 0 && t.FeatureID != nil {
 			if err := storePR(ctx, cd, t, res); err != nil {
@@ -681,4 +696,55 @@ func (c *Code) ResolveMCP(ctx context.Context, tok string) (mcp.Grant, bool) {
 		return nil
 	}
 	return g, true
+}
+
+// retryCommit repeats the steps of Hammurapi of a task whose commit failed,
+// from the changes kept at the end of its run (FTR.HMR.DEV-0004 R12–R14): no
+// run of the agent, no new cost.
+func (c *Code) retryCommit(ctx context.Context, t *cycledata.Task) error {
+	var prev Result
+	_ = json.Unmarshal(t.Result, &prev)
+	changes, _, _, err := c.archived(ctx, t)
+	if err != nil {
+		res := prev
+		res.Status, res.ErrorClass, res.Error, res.noUsage = "failed", ClassGit, err.Error(), true
+		metrics.CodeRetryCommits.WithLabelValues("failed").Inc()
+		return c.finish(ctx, t, res)
+	}
+	d, err := c.describe(ctx, t)
+	if err != nil {
+		return err
+	}
+	p, token, err := c.repo(ctx, d)
+	if err != nil {
+		return err
+	}
+	out := retrySteps(ctx, p, token, d, prev, changes)
+	result := out.ErrorClass
+	if out.Status == "succeeded" {
+		result = "succeeded"
+	}
+	metrics.CodeRetryCommits.WithLabelValues(result).Inc()
+	return c.finish(ctx, t, out)
+}
+
+// retrySteps repeats the steps of Hammurapi over the kept changes; a branch
+// that got commits since the failed attempt is not overwritten (R14).
+func retrySteps(ctx context.Context, p git.Provider, token string, d *Description, prev Result, changes []git.FileChange) Result {
+	res := prev
+	res.Status, res.ErrorClass, res.Error, res.noUsage = "failed", "", "", true
+	res.Requirements, res.TestCases = nil, nil
+	if prev.BranchHead != "" {
+		if h, err := p.BranchHead(ctx, token, d.Branch); err == nil && h != "" && h != prev.BranchHead {
+			res.Steps = append(res.Steps, Step{Step: StepBranch, Status: StepFailed, Detail: "the branch moved: " + shortSHA(h), At: time.Now().UTC(), Retry: true})
+			return withErr(res, ClassBranchMoved, fmt.Errorf("the branch %s changed after the run of the agent", d.Branch))
+		}
+	}
+	n := len(res.Steps)
+	out := commit(ctx, p, token, d, res, changes, prev.Summary)
+	for i := n; i < len(out.Steps); i++ {
+		out.Steps[i].Retry = true
+	}
+	out.noUsage = true
+	return out
 }

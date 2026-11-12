@@ -174,6 +174,14 @@ func (m TaskMachine) Step(ctx context.Context, tx pgx.Tx, run *workflows.Run, ev
 		return res, err
 	}
 	switch run.State {
+	case "retry_commit": // FTR.HMR.DEV-0004 R12: the steps of Hammurapi from the kept changes, no run of the agent
+		runID := ""
+		if t.NabuRunID != nil {
+			runID = *t.NabuRunID
+		}
+		return workflows.Result{State: "applying", Context: run.Context, NextRunAt: workflows.At(now.Add(applyWindow)),
+			Effects: []workflows.Effect{{Type: EffectApply, Payload: RunFinished{TaskID: t.ID, RunID: runID, Status: "succeeded", RetryCommit: true}}},
+			Notify:  taskNotify(t)}, nil
 	case "queued":
 		max := m.Limits.MaxParallel
 		if max <= 0 {
