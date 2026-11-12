@@ -3,7 +3,7 @@ module github.com/GreenOnGrey/hammurapi-core
 go 1.27
 
 require (
-	github.com/GreenOnGrey/speclint/v2 v2.1.0
+	github.com/GreenOnGrey/speclint/v2 v2.2.0
 	github.com/exaring/otelpgx v0.12.0
 	github.com/gabriel-vasile/mimetype v1.4.15
 	github.com/go-chi/chi/v5 v5.3.2
