@@ -98,7 +98,7 @@ func TestCommitNotFoundOnExistingBranch(t *testing.T) {
 func TestPromptSplitsTestCasesByService(t *testing.T) {
 	d := commitDescription()
 	d.Service = "nabu-web"
-	d.TestCases = []cycledata.TestCase{{ID: "UI-01", Level: "E", ReqIDs: []string{"R2"}, Title: "Screen"},
+	d.TestCases = []cycledata.TestCase{{ID: "TCS-10", Level: "E", ReqIDs: []string{"R2"}, Title: "Screen"},
 		{ID: "CTR-01", Level: "I", ReqIDs: []string{"R3"}, Title: "Contract", Services: []string{"nabu-core", "nabu-web"}}}
 	d.OtherTestCases = []cycledata.TestCase{{ID: "MIG-01", Level: "I", ReqIDs: []string{"R1"}, Title: "Migration", Services: []string{"nabu-core"}}}
 	p := Prompt(d)

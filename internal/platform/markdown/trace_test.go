@@ -79,9 +79,9 @@ func TestParseTestCases(t *testing.T) {
 func TestParseTestCaseServices(t *testing.T) {
 	doc := "| ID | Требования | Сервисы | Сценарий | Ожидаемый результат | Ур. |\n|---|---|---|---|---|---|\n" +
 		"| `MIG-01` | R1 | `nabu-core` | Миграция | Колонки | I |\n" +
-		"| `UI-01` | R2 |  | Экран | Видно | E |\n" +
+		"| `TCS-10` | R2 |  | Экран | Видно | E |\n" +
 		"| `CTR-01` | R3 | `nabu-core`, `nabu-web` | Контракт | Схемы | I |\n" +
-		"| `LOG-18` | R4 | — | Стенд | 5 с | M |\n"
+		"| `TCS-11` | R4 | — | Стенд | 5 с | M |\n"
 	got := ParseTestCases(doc)
 	want := [][]string{{"nabu-core"}, nil, {"nabu-core", "nabu-web"}, nil}
 	if len(got) != 4 {
