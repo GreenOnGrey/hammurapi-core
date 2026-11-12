@@ -191,3 +191,10 @@ var (
 )
 
 func init() { Registry.MustRegister(CodeTasks, CodeStartSeconds, CodeApplySeconds) }
+
+// FTR.HMR.SPEC-0006 arch §8: answers of the spec tools by source — the index or the branch of a feature in work.
+var SpecToolCalls = prometheus.NewCounterVec(prometheus.CounterOpts{
+	Name: "hammurapi_spec_tool_calls_total", Help: "Answers of spec_read, spec_requirements and spec_links by source.",
+}, []string{"tool", "source"})
+
+func init() { Registry.MustRegister(SpecToolCalls) }

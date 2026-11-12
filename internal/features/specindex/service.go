@@ -68,6 +68,8 @@ type Service struct {
 	events events.Publisher
 	cfg    Config
 	now    func() time.Time
+	// branchDocs caches documents of features in work (FTR.HMR.SPEC-0006 A2).
+	branchDocs branchCache
 }
 
 // NewService creates the service.

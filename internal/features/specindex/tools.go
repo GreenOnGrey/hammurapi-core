@@ -3,6 +3,7 @@ package specindex
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -112,7 +113,8 @@ func (s *Service) Tools() []mcp.Tool {
 		{
 			Name: "spec_read",
 			Description: "Read a document of the default branch: the whole document, or one section by its slug or heading text. " +
-				"A long document returns its beginning, the full table of contents and the sections left out — read them by section.",
+				"A long document returns its beginning, the full table of contents and the sections left out — read them by section. " +
+				"A feature in work, not merged yet, is read from its branch: source is branch and branch names it (FTR.HMR.SPEC-0006).",
 			Modes: allModes, ReadOnly: true,
 			InputSchema: schema(map[string]any{"featureKey": str("FTR.<DOMAIN>.<SYSTEM>-NNNN"), "area": areaEnum,
 				"section": str("Slug or heading text of a section (levels 2–3)")}, "featureKey", "area"),
@@ -125,6 +127,7 @@ func (s *Service) Tools() []mcp.Tool {
 				if err != nil {
 					return "", err
 				}
+				countSource("spec_read", out.Source)
 				return asJSON(out)
 			},
 		},
@@ -132,7 +135,7 @@ func (s *Service) Tools() []mcp.Tool {
 			Name: "spec_requirements",
 			Description: "Requirements of a feature from its product specification: id (R1…), text, acceptance criteria (Given…/Дано…) and section. " +
 				"kind decision gives the architecture decisions A1… of its arch specification instead (FTR.HMR.DEV-0003), all — both. " +
-				"ids narrows them, e.g. [\"R3\"] or [\"A5\"].",
+				"ids narrows them, e.g. [\"R3\"] or [\"A5\"]. A feature in work is read from its branch (source branch).",
 			Modes: allModes, ReadOnly: true,
 			InputSchema: schema(map[string]any{"featureKey": str("FTR.<DOMAIN>.<SYSTEM>-NNNN"),
 				"ids":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
@@ -156,10 +159,24 @@ func (s *Service) Tools() []mcp.Tool {
 					return "", &mcp.ToolError{Msg: "kind is requirement, decision or all"}
 				}
 				reqs, err := s.FeatureRequirements(ctx, a.FeatureKey, a.IDs, a.Kind)
+				source, branch := SourceIndex, ""
+				if isNotFound(err) { // FTR.HMR.SPEC-0006 R1: a feature in work answers from its branch
+					r, b, berr := s.requirementsBranch(ctx, a.FeatureKey, a.IDs, a.Kind)
+					if berr == nil {
+						reqs, source, branch, err = r, SourceBranch, b, nil
+					} else if !errors.Is(berr, errNotInWork) {
+						err = berr
+					}
+				}
 				if err != nil {
 					return "", err
 				}
-				return asJSON(map[string]any{"featureKey": a.FeatureKey, "requirements": reqs})
+				countSource("spec_requirements", source)
+				out := map[string]any{"featureKey": a.FeatureKey, "requirements": reqs, "source": source}
+				if branch != "" {
+					out["branch"] = branch
+				}
+				return asJSON(out)
 			},
 		},
 		{
@@ -191,7 +208,8 @@ func (s *Service) Tools() []mcp.Tool {
 				"Every link has a layer: product or arch. " +
 				"With featureKey — the four lists of that feature: extends, changes, extendedBy, changedBy, each item with key, title, layer, items " +
 				"and indexed (false: the key is not in the default branch). Without featureKey — the graph: features and edges, narrowed by domain, " +
-				"system, kind and layer; a graph larger than the limit of spec_read asks to narrow it. Unlike spec_references, which finds every mention, these are dependencies.",
+				"system, kind and layer; a graph larger than the limit of spec_read asks to narrow it. Unlike spec_references, which finds every mention, these are dependencies. " +
+				"A feature in work gives its outgoing links from the documents of its branch (source branch, FTR.HMR.SPEC-0006).",
 			Modes: allModes, ReadOnly: true,
 			InputSchema: schema(map[string]any{"featureKey": str("FTR.<DOMAIN>.<SYSTEM>-NNNN; omit for the graph"),
 				"domain": str("Domain key, for the graph"), "system": str("System key, for the graph"),
@@ -220,6 +238,7 @@ func (s *Service) Tools() []mcp.Tool {
 					if err != nil {
 						return "", err
 					}
+					countSource("spec_links", out.Source)
 					return asJSON(out)
 				}
 				g, err := s.SpecGraph(ctx, GraphQuery{Domain: strings.ToUpper(a.Domain), System: strings.ToUpper(a.System), Kind: a.Kind, Layer: a.Layer})
@@ -251,6 +270,9 @@ type LinksResult struct {
 	FeatureKey string  `json:"featureKey"`
 	Title      *string `json:"title"`
 	Indexed    bool    `json:"indexed"`
+	// Source is index or branch (FTR.HMR.SPEC-0006); Branch names the branch of a feature in work.
+	Source string `json:"source"`
+	Branch string `json:"branch,omitempty"`
 	FeatureLinks
 }
 
@@ -271,14 +293,23 @@ func (s *Service) LinksOf(ctx context.Context, key, kind, layer string) (*LinksR
 	if err != nil {
 		return nil, err
 	}
-	out := &LinksResult{FeatureKey: key, FeatureLinks: *l}
+	out := &LinksResult{FeatureKey: key, Source: SourceIndex, FeatureLinks: *l}
 	if err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM spec_documents WHERE feature_key = $1),
 		(SELECT title FROM features WHERE unique_id = $1)`, key).Scan(&out.Indexed, &out.Title); err != nil {
 		return nil, err
 	}
 	if !out.Indexed {
-		out.Title = nil
-		if len(l.Extends)+len(l.Changes)+len(l.ExtendedBy)+len(l.ChangedBy) == 0 {
+		// FTR.HMR.SPEC-0006 R1: a feature in work adds its outgoing links from its branch
+		branch, err := s.linksBranch(ctx, key, layer, &out.FeatureLinks)
+		switch {
+		case err == nil:
+			out.Source, out.Branch = SourceBranch, branch
+		case !errors.Is(err, errNotInWork):
+			return nil, err
+		default:
+			out.Title = nil
+		}
+		if out.Source == SourceIndex && len(out.Extends)+len(out.Changes)+len(out.ExtendedBy)+len(out.ChangedBy) == 0 {
 			// the key has no document in any area: notFound answers "not in the index" with similar keys
 			return nil, s.notFound(ctx, key, "product")
 		}
@@ -302,6 +333,9 @@ type ReadResult struct {
 	TOC             []Heading `json:"toc"`
 	Truncated       bool      `json:"truncated"`
 	OmittedSections []string  `json:"omittedSections,omitempty"`
+	// Source is index or branch (FTR.HMR.SPEC-0006); Branch names the branch of a feature in work.
+	Source string `json:"source"`
+	Branch string `json:"branch,omitempty"`
 }
 
 // Read returns a document or one of its sections within the limit (R19).
@@ -309,12 +343,21 @@ func (s *Service) Read(ctx context.Context, key, area, section string) (*ReadRes
 	var md string
 	err := s.pool.QueryRow(ctx, `SELECT markdown FROM spec_documents WHERE feature_key = $1 AND area = $2`, key, area).Scan(&md)
 	if postgres.IsNoRows(err) {
-		return nil, s.notFound(ctx, key, area)
+		// FTR.HMR.SPEC-0006 R1: a feature in work is read from its branch
+		r, berr := s.readBranch(ctx, key, area, section)
+		if errors.Is(berr, errNotInWork) {
+			return nil, s.notFound(ctx, key, area)
+		}
+		return r, berr
 	}
 	if err != nil {
 		return nil, err
 	}
-	return readDoc(key, area, md, section, s.cfg.AgentReadMaxChars)
+	r, err := readDoc(key, area, md, section, s.cfg.AgentReadMaxChars)
+	if r != nil {
+		r.Source = SourceIndex
+	}
+	return r, err
 }
 
 func readDoc(key, area, md, section string, limit int) (*ReadResult, error) {
@@ -530,4 +573,10 @@ func sectionTitle(s string) string {
 		s = s[loc[1]:]
 	}
 	return strings.TrimSpace(strings.TrimLeft(s, ". )"))
+}
+
+// isNotFound tells the answer «not in the index» of notFound (FTR.HMR.SPEC-0006).
+func isNotFound(err error) bool {
+	var te *mcp.ToolError
+	return errors.As(err, &te) && strings.HasPrefix(te.Msg, "not_found:")
 }
