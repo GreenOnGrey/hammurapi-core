@@ -422,6 +422,51 @@ func (s *Service) RetryTask(ctx context.Context, p *domain.Principal, key string
 	})
 }
 
+// RetryCommit repeats the steps of Hammurapi of a task whose commit failed,
+// from the changes of the agent kept for it (POST …/codegen/tasks/{taskId}/retry-commit,
+// FTR.HMR.DEV-0004 R12–R14): the same task and its run of Nabu, a new run of its workflow.
+func (s *Service) RetryCommit(ctx context.Context, p *domain.Principal, key string, taskID uuid.UUID) error {
+	f, err := features.Load(ctx, s.store, key)
+	if err != nil {
+		return err
+	}
+	if err := features.RequireExpert(p, f.DomainKey); err != nil {
+		return err
+	}
+	return s.store.InTx(ctx, func(tx specdata.Store) error {
+		cd := cycledata.New(tx.Q())
+		t, err := cd.TaskByID(ctx, taskID)
+		if errors.Is(err, cycledata.ErrNotFound) || (err == nil && (t.FeatureID == nil || *t.FeatureID != f.ID)) {
+			return apperr.NotFound("task_not_found", "task not found")
+		}
+		if err != nil {
+			return err
+		}
+		if t.Status != "failed" {
+			return apperr.Conflict("task_not_failed", "only a failed task can be retried")
+		}
+		if t.RetryOf(time.Now()) != "commit" {
+			return apperr.Conflict("retry_commit_unavailable", "the commit cannot be repeated: retry the agent")
+		}
+		old, err := workflows.Load(ctx, tx.Q(), t.RunID)
+		if err != nil {
+			return err
+		}
+		runID, err := workflows.Start(ctx, tx.Q(), TaskKind, t.ID, old.ParentID, "retry_commit", map[string]any{"type": t.Type, "retryCommit": true})
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Q().Exec(ctx, `UPDATE agent_tasks SET status = 'running', progress = 'retry_commit', error = NULL, error_class = NULL,
+			finished_at = NULL, workflow_run_id = $2 WHERE id = $1`, t.ID, runID); err != nil {
+			return err
+		}
+		if old.ParentID != nil {
+			return workflows.Send(ctx, tx.Q(), *old.ParentID, "retry", map[string]any{"taskId": taskID})
+		}
+		return nil
+	})
+}
+
 // ReviewComment starts an address_review task for a review comment on an
 // agent PR (R18), unless one is already queued for the PR.
 func (s *Service) ReviewComment(ctx context.Context, pr *cycledata.PR, body, author string) error {
@@ -475,6 +520,21 @@ func (s *Service) Routes(r chi.Router) {
 			return err
 		}
 		httpx.JSON(w, 200, out)
+		return nil
+	}))
+	r.Post("/features/{key}/codegen/tasks/{taskId}/retry-commit", httpx.Handler(func(w http.ResponseWriter, r *http.Request) error {
+		p, err := httpx.MustPrincipal(r)
+		if err != nil {
+			return err
+		}
+		id, err := uuid.Parse(chi.URLParam(r, "taskId"))
+		if err != nil {
+			return apperr.NotFound("task_not_found", "task not found")
+		}
+		if err := s.RetryCommit(r.Context(), p, chi.URLParam(r, "key"), id); err != nil {
+			return err
+		}
+		w.WriteHeader(http.StatusAccepted)
 		return nil
 	}))
 	r.Post("/features/{key}/codegen/tasks/{taskId}/retry", httpx.Handler(func(w http.ResponseWriter, r *http.Request) error {

@@ -5,6 +5,7 @@ package codegen
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -17,13 +18,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GreenOnGrey/hammurapi-core/internal/cycledata"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/git"
+	"github.com/GreenOnGrey/hammurapi-core/internal/platform/metrics"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/nabu"
 )
 
 // changes reads the archive of changes of a run: the files to commit, the
 // plan and what was left out.
-func (c *Code) changes(ctx context.Context, runID string) ([]git.FileChange, string, []string, error) {
+func (c *Code) changes(ctx context.Context, t *cycledata.Task, runID string) ([]git.FileChange, string, []string, error) {
 	rc, err := c.Nabu.Changes(ctx, runID)
 	var ae *nabu.APIError
 	if errors.As(err, &ae) && ae.Code == "no_changes" {
@@ -31,6 +34,49 @@ func (c *Code) changes(ctx context.Context, runID string) ([]git.FileChange, str
 	}
 	if err != nil {
 		return nil, "", nil, err
+	}
+	defer rc.Close()
+	b, err := io.ReadAll(io.LimitReader(rc, maxArchive))
+	if err != nil {
+		return nil, "", nil, err
+	}
+	c.keepArchive(ctx, t, b)
+	return ReadChanges(bytes.NewReader(b))
+}
+
+// maxArchive bounds the archive of changes of a run read into memory.
+const maxArchive = 512 << 20
+
+// keepArchive keeps the archive of changes for «Повторить коммит» (FTR.HMR.DEV-0004 R13, arch A10):
+// before the commit, so a failed commit can be repeated; an error of the store only loses the repeat.
+func (c *Code) keepArchive(ctx context.Context, t *cycledata.Task, b []byte) {
+	if c.Archives == nil {
+		return
+	}
+	key := "codegen/changes/" + t.ID.String() + ".tar.gz"
+	if err := c.Archives.Put(ctx, key, bytes.NewReader(b), int64(len(b)), "application/gzip"); err != nil {
+		slog.WarnContext(ctx, "keep the changes of a run for a retry of the commit", "task", t.ID, "err", err)
+		return
+	}
+	keep := c.ChangesKeep
+	if keep <= 0 {
+		keep = 14 * 24 * time.Hour
+	}
+	if _, err := c.Pool.Exec(ctx, `UPDATE agent_tasks SET changes_key = $2, changes_until = now() + $3::interval WHERE id = $1`,
+		t.ID, key, fmt.Sprintf("%d seconds", int64(keep.Seconds()))); err != nil {
+		slog.WarnContext(ctx, "keep the changes of a run for a retry of the commit", "task", t.ID, "err", err)
+	}
+	metrics.CodeChangesBytes.Add(float64(len(b)))
+}
+
+// archived reads the kept archive of changes of a task.
+func (c *Code) archived(ctx context.Context, t *cycledata.Task) ([]git.FileChange, string, []string, error) {
+	if c.Archives == nil || t.ChangesKey == nil {
+		return nil, "", nil, errors.New("the changes of the agent are no longer kept")
+	}
+	rc, err := c.Archives.Get(ctx, *t.ChangesKey)
+	if err != nil {
+		return nil, "", nil, fmt.Errorf("read the kept changes: %w", err)
 	}
 	defer rc.Close()
 	return ReadChanges(rc)

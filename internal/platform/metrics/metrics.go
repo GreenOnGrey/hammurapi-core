@@ -217,3 +217,15 @@ var (
 )
 
 func init() { Registry.MustRegister(RunLogStreams, RunLogErrors) }
+
+// FTR.HMR.DEV-0004 arch §8: the archives of changes kept for a retry of the commit and the retries.
+var (
+	CodeChangesBytes = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "hammurapi_codegen_changes_bytes_total", Help: "Bytes of the archives of changes kept for a retry of the commit.",
+	})
+	CodeRetryCommits = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "hammurapi_codegen_retry_commit_total", Help: "Retries of the commit by result: succeeded, branch_moved, failed, git.",
+	}, []string{"result"})
+)
+
+func init() { Registry.MustRegister(CodeChangesBytes, CodeRetryCommits) }

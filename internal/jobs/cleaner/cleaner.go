@@ -37,6 +37,8 @@ type Report struct {
 	Locks       int64
 	Imports     int
 	Branches    int
+	// Archives of changes of code tasks no longer needed for «Повторить коммит» (FTR.HMR.DEV-0004 R13).
+	Archives int
 }
 
 // Run executes every step; a failing step is logged and does not stop the others.
@@ -65,8 +67,10 @@ func (c *Cleaner) Run(ctx context.Context) (Report, error) {
 	note("imports", err)
 	rep.Branches, err = c.branches(ctx)
 	note("branches", err)
+	rep.Archives, err = c.archives(ctx)
+	note("archives", err)
 	slog.InfoContext(ctx, "cleaner finished", "attachments", rep.Attachments, "sessions", rep.Sessions,
-		"locks", rep.Locks, "imports", rep.Imports, "branches", rep.Branches)
+		"locks", rep.Locks, "imports", rep.Imports, "branches", rep.Branches, "archives", rep.Archives)
 	return rep, firstErr
 }
 
@@ -171,6 +175,49 @@ func (c *Cleaner) branches(ctx context.Context) (int, error) {
 			continue
 		}
 		if err := c.Store.SetBranchCleanupPending(ctx, f.ID, false); err != nil {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
+}
+
+// archives deletes the kept changes of code tasks that no longer need them
+// (FTR.HMR.DEV-0004 R13, arch §4.5): a task that succeeded, a task replaced by
+// a newer one of its service and feature, or a kept term that has passed.
+func (c *Cleaner) archives(ctx context.Context) (int, error) {
+	rows, err := c.Pool.Query(ctx, `SELECT t.id, t.changes_key FROM agent_tasks t
+		WHERE t.changes_key IS NOT NULL AND t.status NOT IN ('queued', 'running') AND (
+		  t.status = 'succeeded' OR t.changes_until < $1 OR EXISTS (
+		    SELECT 1 FROM agent_tasks n WHERE n.feature_id = t.feature_id AND n.service_id = t.service_id AND n.created_at > t.created_at))`, c.Now())
+	if err != nil {
+		return 0, err
+	}
+	type kept struct {
+		id  uuid.UUID
+		key string
+	}
+	var all []kept
+	for rows.Next() {
+		var k kept
+		if err := rows.Scan(&k.id, &k.key); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		all = append(all, k)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, k := range all {
+		if c.S3 != nil {
+			if err := c.S3.Delete(ctx, k.key); err != nil {
+				return n, err
+			}
+		}
+		if _, err := c.Pool.Exec(ctx, `UPDATE agent_tasks SET changes_key = NULL, changes_until = NULL WHERE id = $1`, k.id); err != nil {
 			return n, err
 		}
 		n++

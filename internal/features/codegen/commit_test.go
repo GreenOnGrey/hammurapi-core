@@ -111,3 +111,50 @@ func TestPromptSplitsTestCasesByService(t *testing.T) {
 		t.Fatalf("prompt:\n%s", p[mine:])
 	}
 }
+
+// FTR.HMR.DEV-0004 qa RTC-02, RTC-05, RTC-06: «Повторить коммит» commits the kept changes onto the head the
+// failed attempt left, refuses a branch that moved, creates a branch that is missing.
+func TestRetrySteps(t *testing.T) {
+	noPauses(t)
+	ctx := context.Background()
+	d := commitDescription()
+	changes := []git.FileChange{{Path: "a.go", Content: []byte("package a")}}
+	prev := Result{Summary: "done", BranchHead: "base", Steps: []Step{{Step: StepBranch, Status: StepOK}, {Step: StepCommit, Status: StepFailed}}}
+
+	p := gmocks.NewMockProvider(gomock.NewController(t))
+	gomock.InOrder(
+		p.EXPECT().BranchHead(ctx, "tok", d.Branch).Return("base", nil),
+		p.EXPECT().DefaultBranch(ctx, "tok").Return("main", nil),
+		p.EXPECT().BranchHead(ctx, "tok", d.Branch).Return("base", nil),
+		p.EXPECT().Commit(ctx, "tok", d.Branch, gomock.Any(), changes).Return("c2", nil),
+		p.EXPECT().CreatePR(ctx, "tok", d.Branch, "main", gomock.Any(), gomock.Any()).Return(&git.PR{Number: 9, URL: "u"}, nil),
+	)
+	res := retrySteps(ctx, p, "tok", d, prev, changes)
+	if res.Status != "succeeded" || res.PRNumber != 9 || !res.noUsage {
+		t.Fatalf("RTC-02 %+v", res)
+	}
+	if got := stepsOf(res); got != "branch:ok commit:failed branch:ok commit:ok pr:ok" || res.Steps[1].Retry || !res.Steps[2].Retry || !res.Steps[4].Retry {
+		t.Fatalf("RTC-02 steps %s %+v", got, res.Steps)
+	}
+
+	p = gmocks.NewMockProvider(gomock.NewController(t))
+	p.EXPECT().BranchHead(ctx, "tok", d.Branch).Return("pushed", nil)
+	res = retrySteps(ctx, p, "tok", d, prev, changes)
+	if res.Status != "failed" || res.ErrorClass != ClassBranchMoved || stepsOf(res) != "branch:ok commit:failed branch:failed" {
+		t.Fatalf("RTC-05 %+v", res)
+	}
+
+	p = gmocks.NewMockProvider(gomock.NewController(t))
+	gomock.InOrder(
+		p.EXPECT().BranchHead(ctx, "tok", d.Branch).Return("", git.ErrNotFound),
+		p.EXPECT().DefaultBranch(ctx, "tok").Return("main", nil),
+		p.EXPECT().BranchHead(ctx, "tok", d.Branch).Return("", git.ErrNotFound),
+		p.EXPECT().BranchHead(ctx, "tok", "main").Return("m1", nil),
+		p.EXPECT().CreateBranch(ctx, "tok", d.Branch, "m1").Return(nil),
+		p.EXPECT().Commit(ctx, "tok", d.Branch, gomock.Any(), changes).Return("c3", nil),
+		p.EXPECT().CreatePR(ctx, "tok", d.Branch, "main", gomock.Any(), gomock.Any()).Return(&git.PR{Number: 10, URL: "u"}, nil),
+	)
+	if res := retrySteps(ctx, p, "tok", d, Result{BranchHead: "base"}, changes); res.Status != "succeeded" {
+		t.Fatalf("RTC-06 %+v", res)
+	}
+}
