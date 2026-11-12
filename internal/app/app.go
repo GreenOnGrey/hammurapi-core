@@ -49,6 +49,7 @@ import (
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/nabuconn"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/overview"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/profile"
+	"github.com/GreenOnGrey/hammurapi-core/internal/features/prsync"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/releases"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/rollback"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/rules"
@@ -578,6 +579,9 @@ func RunWorker(ctx context.Context, cfg *config.Config) error {
 	// (result sinks, FTR.HMR.CMN-0007 R4).
 	proc.Specs = sl.spec  // pushes to the default branch update the specification index
 	proc.Rules = rulesSvc // FTR.HMR.DEV-0003 R20: pushes to rules/ check the templates
+	// FTR.HMR.DEV-0004 R17: the CI status, heads and titles of open PRs from the provider
+	prs := &prsync.Service{Pool: c.pool, Git: c.provider, Events: c.events, Interval: cfg.PRSyncInterval}
+	proc.Checks = prs
 	// R20, R24: the templates of the default branch are checked at the start; an empty repository gets the starter rules
 	go func() {
 		if err := rulesSvc.Start(ctx); err != nil && ctx.Err() == nil {
@@ -640,6 +644,7 @@ func RunWorker(ctx context.Context, cfg *config.Config) error {
 	})
 	g.Go(func() error { return engine.Run(gctx) })
 	g.Go(func() error { return sl.spec.Run(gctx) }) // checks of the specification repository (FTR.HMR.CMN-0005)
+	g.Go(func() error { return prs.Run(gctx) })     // FTR.HMR.DEV-0004 R17: the sync of open PRs
 	// FTR.HMR.SPEC-0002: the check of speclint in CI of the repositories, the pull requests of its version
 	g.Go(func() error {
 		return cicheck.NewService(c.pool, c.provider, tokens, cfg.GitDefaultBranch, cfg.PublicAPIURL).Run(gctx)

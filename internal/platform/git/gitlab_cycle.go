@@ -273,6 +273,17 @@ func (g *GitLab) ParseHook(h http.Header, body []byte) (*HookEvent, error) {
 			return nil, nil
 		}
 		return &HookEvent{Kind: "pr", PR: base}, nil
+	case "Pipeline Hook":
+		// FTR.HMR.DEV-0004 R17: a pipeline of a commit changed — the cue to ask for its status
+		var p struct {
+			OA struct {
+				SHA string `json:"sha"`
+			} `json:"object_attributes"`
+		}
+		if err := json.Unmarshal(body, &p); err != nil || p.OA.SHA == "" {
+			return nil, err
+		}
+		return &HookEvent{Kind: "ci", CI: &CIEvent{EventID: id, Repo: repo, SHA: p.OA.SHA}}, nil
 	case "Note Hook":
 		var p struct {
 			OA struct {

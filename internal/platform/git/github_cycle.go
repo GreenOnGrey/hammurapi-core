@@ -326,6 +326,29 @@ func (g *GitHub) ParseHook(h http.Header, body []byte) (*HookEvent, error) {
 			ev.MergeSHA = p.PR.MergeSHA
 		}
 		return &HookEvent{Kind: "pr", PR: ev}, nil
+	case "check_suite", "status":
+		// FTR.HMR.DEV-0004 R17: a suite of checks or a status of a commit finished — the cue to ask
+		// for all of them. Single check runs are not taken: a suite ends when its runs do (tech §14).
+		var p struct {
+			SHA   string `json:"sha"`
+			Suite struct {
+				HeadSHA string `json:"head_sha"`
+			} `json:"check_suite"`
+		}
+		if err := json.Unmarshal(body, &p); err != nil {
+			return nil, err
+		}
+		sha := p.SHA
+		if h.Get("X-GitHub-Event") != "status" {
+			if common.Action != "completed" {
+				return nil, nil
+			}
+			sha = p.Suite.HeadSHA
+		}
+		if sha == "" {
+			return nil, nil
+		}
+		return &HookEvent{Kind: "ci", CI: &CIEvent{EventID: id, Repo: repo, SHA: sha}}, nil
 	case "pull_request_review":
 		var p struct {
 			Review struct {

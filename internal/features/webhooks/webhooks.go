@@ -26,7 +26,6 @@ import (
 	"github.com/GreenOnGrey/hammurapi-core/internal/cycledata"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/trace"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/workflows"
-	"github.com/GreenOnGrey/hammurapi-core/internal/platform/postgres"
 
 	"github.com/GreenOnGrey/hammurapi-core/internal/domain"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/gates"
@@ -132,6 +131,13 @@ type Processor struct {
 	Specs SpecPushes
 	// Rules checks the templates against the document contract after a push to rules/ (FTR.HMR.DEV-0003 R20).
 	Rules RulesPushes
+	// Checks takes the CI status of open PRs from the checks of the provider (FTR.HMR.DEV-0004 R17).
+	Checks CheckEvents
+}
+
+// CheckEvents is the sync of PRs as the processor uses it: a check of a commit changed.
+type CheckEvents interface {
+	CommitChanged(ctx context.Context, ev *git.CIEvent) error
 }
 
 // RulesPushes is the check of the rules as the push processor uses it.
@@ -220,6 +226,15 @@ func (p *Processor) Dispatch(ctx context.Context, ev *git.HookEvent) error {
 		return p.pullRequest(ctx, ev.PR)
 	case "review":
 		return p.review(ctx, ev.Review)
+	case "ci":
+		if p.Checks == nil {
+			return nil
+		}
+		// a failure is not retried from Kafka: the sync of open PRs takes the status later (arch A15)
+		if err := p.Checks.CommitChanged(ctx, ev.CI); err != nil {
+			slog.WarnContext(ctx, "pr ci status", "repo", ev.CI.Repo, "sha", ev.CI.SHA, "err", err)
+		}
+		return nil
 	}
 	return nil
 }
@@ -258,35 +273,12 @@ func (p *Processor) servicePush(ctx context.Context, push *git.PushEvent) error 
 			if err := cd.SetPRHead(ctx, pr.ID, push.After); err != nil {
 				return err
 			}
-			if err := notifyFeature(ctx, tx.Q(), pr.FeatureID, "pr_updated", map[string]any{"prId": pr.ID, "headSha": push.After}); err != nil {
+			if err := workflows.SendToFeature(ctx, tx.Q(), pr.FeatureID, "pr_updated", map[string]any{"prId": pr.ID, "headSha": push.After}); err != nil {
 				return err
 			}
 		}
 		return nil
 	})
-}
-
-// notifyFeature delivers an event to the active runs of a feature.
-func notifyFeature(ctx context.Context, q postgres.Querier, featureID uuid.UUID, typ string, payload any) error {
-	for _, kind := range []string{"codegen", "validation"} {
-		if _, err := workflows.SendToSubject(ctx, q, kind, featureID, typ, payload); err != nil {
-			return err
-		}
-	}
-	var releaseID uuid.UUID
-	err := q.QueryRow(ctx, `SELECT id FROM releases WHERE feature_id = $1`, featureID).Scan(&releaseID)
-	if postgres.IsNoRows(err) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	for _, kind := range []string{"release", "rollback"} {
-		if _, err := workflows.SendToSubject(ctx, q, kind, releaseID, typ, payload); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // tag delivers a tag to releases and rollbacks waiting for a deploy signal of
@@ -395,14 +387,14 @@ func (p *Processor) pullRequest(ctx context.Context, ev *git.PREvent) error {
 			if err := cd.MarkPRMerged(ctx, pr.ID, ev.MergeSHA, nil); err != nil {
 				return err
 			}
-			if err := notifyFeature(ctx, tx.Q(), pr.FeatureID, "pr_merged", map[string]any{"prId": pr.ID, "mergeSha": ev.MergeSHA}); err != nil {
+			if err := workflows.SendToFeature(ctx, tx.Q(), pr.FeatureID, "pr_merged", map[string]any{"prId": pr.ID, "mergeSha": ev.MergeSHA}); err != nil {
 				return err
 			}
 		case "closed":
 			if err := cd.MarkPRClosed(ctx, pr.ID); err != nil {
 				return err
 			}
-			if err := notifyFeature(ctx, tx.Q(), pr.FeatureID, "pr_closed", map[string]any{"prId": pr.ID}); err != nil {
+			if err := workflows.SendToFeature(ctx, tx.Q(), pr.FeatureID, "pr_closed", map[string]any{"prId": pr.ID}); err != nil {
 				return err
 			}
 		default: // opened, updated, reopened
@@ -412,12 +404,17 @@ func (p *Processor) pullRequest(ctx context.Context, ev *git.PREvent) error {
 					return err
 				}
 			}
+			payload := map[string]any{"prId": pr.ID}
 			if ev.HeadSHA != "" && ev.HeadSHA != pr.HeadSHA {
 				if err := cd.SetPRHead(ctx, pr.ID, ev.HeadSHA); err != nil {
 					return err
 				}
 			}
-			if err := notifyFeature(ctx, tx.Q(), pr.FeatureID, "pr_updated", map[string]any{"prId": pr.ID, "headSha": ev.HeadSHA}); err != nil {
+			// headSha means new code to validation: it clears the signatures. A new title is not new code.
+			if ev.HeadSHA != "" && (ev.HeadSHA != pr.HeadSHA || ev.Action != "updated") {
+				payload["headSha"] = ev.HeadSHA
+			}
+			if err := workflows.SendToFeature(ctx, tx.Q(), pr.FeatureID, "pr_updated", payload); err != nil {
 				return err
 			}
 		}
@@ -458,7 +455,7 @@ func (p *Processor) review(ctx context.Context, ev *git.ReviewEvent) error {
 				}
 			}
 		}
-		if err := notifyFeature(ctx, tx.Q(), pr.FeatureID, "pr_updated", map[string]any{"prId": pr.ID, "review": ev.State}); err != nil {
+		if err := workflows.SendToFeature(ctx, tx.Q(), pr.FeatureID, "pr_updated", map[string]any{"prId": pr.ID, "review": ev.State}); err != nil {
 			return err
 		}
 		if pr.ByAgent && pr.State == "open" && (ev.State == "changes_requested" || (ev.State == "commented" && strings.TrimSpace(ev.Body) != "")) {

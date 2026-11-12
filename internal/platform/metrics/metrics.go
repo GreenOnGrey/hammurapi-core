@@ -229,3 +229,15 @@ var (
 )
 
 func init() { Registry.MustRegister(CodeChangesBytes, CodeRetryCommits) }
+
+// FTR.HMR.DEV-0004 R17, arch §8: the CI status and the titles of open PRs from the provider.
+var (
+	PRSync = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "hammurapi_pr_sync_total", Help: "Open PRs compared with the git provider, by result (updated, unchanged, failed).",
+	}, []string{"result"})
+	PRCIEvents = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "hammurapi_pr_ci_events_total", Help: "Check events of the git provider, by result (updated, unchanged, unknown, failed).",
+	}, []string{"result"})
+)
+
+func init() { Registry.MustRegister(PRSync, PRCIEvents) }

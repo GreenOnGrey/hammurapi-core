@@ -647,3 +647,27 @@ func (e *PermanentError) Unwrap() error { return e.Err }
 
 // Permanent marks err as permanent.
 func Permanent(err error) error { return &PermanentError{Err: err} }
+
+// SendToFeature sends an event of a PR or of CI to the machines of a feature (codegen, validation)
+// and of its release (release, rollback); a machine that does not run is skipped.
+func SendToFeature(ctx context.Context, q postgres.Querier, featureID uuid.UUID, typ string, payload any) error {
+	for _, kind := range []string{"codegen", "validation"} {
+		if _, err := SendToSubject(ctx, q, kind, featureID, typ, payload); err != nil {
+			return err
+		}
+	}
+	var releaseID uuid.UUID
+	err := q.QueryRow(ctx, `SELECT id FROM releases WHERE feature_id = $1`, featureID).Scan(&releaseID)
+	if postgres.IsNoRows(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, kind := range []string{"release", "rollback"} {
+		if _, err := SendToSubject(ctx, q, kind, releaseID, typ, payload); err != nil {
+			return err
+		}
+	}
+	return nil
+}

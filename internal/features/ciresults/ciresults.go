@@ -239,7 +239,8 @@ func (h *Handler) apply(ctx context.Context, p Payload, tests []Test) ([]uuid.UU
 		if p.Environment == "ci" {
 			for _, pr := range prs {
 				if pr.HeadSHA == p.SHA {
-					if err := cd.SetPRCI(ctx, pr.ID, status); err != nil {
+					// FTR.HMR.DEV-0004 R17: the checks of the provider win; the report sets a PR without them
+					if err := cd.SetPRCIFromReport(ctx, pr.ID, p.SHA, status); err != nil {
 						return err
 					}
 				}

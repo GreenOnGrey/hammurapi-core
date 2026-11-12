@@ -159,6 +159,21 @@ func (mr *MockProviderMockRecorder) Commit(ctx, token, branch, message, changes 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Commit", reflect.TypeOf((*MockProvider)(nil).Commit), ctx, token, branch, message, changes)
 }
 
+// CommitCI mocks base method.
+func (m *MockProvider) CommitCI(ctx context.Context, token, sha string) (string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CommitCI", ctx, token, sha)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// CommitCI indicates an expected call of CommitCI.
+func (mr *MockProviderMockRecorder) CommitCI(ctx, token, sha any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CommitCI", reflect.TypeOf((*MockProvider)(nil).CommitCI), ctx, token, sha)
+}
+
 // CommitParents mocks base method.
 func (m *MockProvider) CommitParents(ctx context.Context, token, sha string) ([]string, error) {
 	m.ctrl.T.Helper()
