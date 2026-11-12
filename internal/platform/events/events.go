@@ -38,6 +38,7 @@ const (
 	DiscoveryProgress = "discovery.progress"
 	FeatureUpdated    = "feature.updated"
 	TaskProgress      = "task.progress"
+	TaskStep          = "task.step" // FTR.HMR.DEV-0004 R8: the steps of Hammurapi after the agent are written
 	ValidationUpdated = "validation.updated"
 	ReleaseUpdated    = "release.updated"
 	ReleaseBlocked    = "release.blocked"

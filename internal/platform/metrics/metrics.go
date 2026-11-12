@@ -205,3 +205,15 @@ var CITestCasesFiltered = prometheus.NewCounterVec(prometheus.CounterOpts{
 }, []string{"service"})
 
 func init() { Registry.MustRegister(CITestCasesFiltered) }
+
+// FTR.HMR.DEV-0004 arch §8: the logs of runs open in the api and why a log could not be given.
+var (
+	RunLogStreams = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "hammurapi_run_log_streams", Help: "Open streams of the logs of runs.",
+	})
+	RunLogErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "hammurapi_run_log_errors_total", Help: "Logs of runs not given, by reason: nabu_unreachable, expired, forbidden.",
+	}, []string{"reason"})
+)
+
+func init() { Registry.MustRegister(RunLogStreams, RunLogErrors) }

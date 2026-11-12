@@ -78,11 +78,15 @@ const contractMaxBytes = 5 << 20
 
 // Result is the stored result of a code task (agent_tasks.result).
 type Result struct {
-	Status       string      `json:"status"` // succeeded | failed
-	ErrorClass   string      `json:"errorClass,omitempty"`
-	PRNumber     int         `json:"prNumber,omitempty"`
-	PRURL        string      `json:"prUrl,omitempty"`
-	PRTitle      string      `json:"prTitle,omitempty"`
+	Status     string `json:"status"` // succeeded | failed
+	ErrorClass string `json:"errorClass,omitempty"`
+	PRNumber   int    `json:"prNumber,omitempty"`
+	PRURL      string `json:"prUrl,omitempty"`
+	PRTitle    string `json:"prTitle,omitempty"`
+	// Steps are the steps of Hammurapi after the agent; BranchHead — the head of
+	// the branch of the task after the last of them (FTR.HMR.DEV-0004 R8, R14).
+	Steps        []Step      `json:"steps,omitempty"`
+	BranchHead   string      `json:"branchHead,omitempty"`
 	Branch       string      `json:"branch,omitempty"`
 	HeadSHA      string      `json:"headSha,omitempty"`
 	Requirements []string    `json:"requirements"`
@@ -545,6 +549,9 @@ func (c *Code) finish(ctx context.Context, t *cycledata.Task, res Result) error 
 	metrics.CodeTokens.WithLabelValues(t.Type).Add(float64(res.TokensIn + res.TokensOut))
 	if c.Events != nil {
 		c.Events.Publish(ctx, events.Event{Type: events.TaskProgress, Data: map[string]any{"taskId": t.ID, "status": res.Status, "service": t.Service}})
+		if len(res.Steps) > 0 { // FTR.HMR.DEV-0004 R8: the log of the task adds the steps of Hammurapi
+			c.Events.Publish(ctx, events.Event{Type: events.TaskStep, Data: map[string]any{"taskId": t.ID, "service": t.Service, "steps": len(res.Steps)}})
+		}
 	}
 	return nil
 }

@@ -131,6 +131,10 @@ type Config struct {
 	WorkflowDispatchers int // effects of workflows run at once (FTR.HMR.CMN-0002 arch §5.2)
 	DiscoveryTimeout    time.Duration
 	WriterTimeout       time.Duration
+	// FTR.HMR.DEV-0004 tech §«Конфигурация»: the streams of the logs of runs and how long Nabu keeps their events.
+	RunLogStreamsPerUser int
+	RunLogStreamsMax     int
+	RunLogRetention      time.Duration
 
 	// FTR.HMR.CMN-0005: the check of the specification repository and the navigator.
 	SpecScanPushDebounce    time.Duration
@@ -234,6 +238,15 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if c.WriterTimeout, err = envDuration("WRITER_TIMEOUT", 30*time.Minute); err != nil {
+		return nil, err
+	}
+	if c.RunLogStreamsPerUser, err = envInt("RUN_LOG_STREAMS_PER_USER", 3); err != nil {
+		return nil, err
+	}
+	if c.RunLogStreamsMax, err = envInt("RUN_LOG_STREAMS_MAX", 100); err != nil {
+		return nil, err
+	}
+	if c.RunLogRetention, err = envDuration("RUN_LOG_RETENTION", 30*24*time.Hour); err != nil {
 		return nil, err
 	}
 	if c.DiscoveryTimeout, err = envDuration("DISCOVERY_TIMEOUT", 20*time.Minute); err != nil {

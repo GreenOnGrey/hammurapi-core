@@ -52,6 +52,7 @@ import (
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/releases"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/rollback"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/rules"
+	"github.com/GreenOnGrey/hammurapi-core/internal/features/runlog"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/services"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/specchanges"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/speccontract"
@@ -476,6 +477,9 @@ func RunAPI(ctx context.Context, cfg *config.Config) error {
 			sl.spec.Routes(r)
 			features.NewHandlers(sl.features).Routes(r)
 			(&usage.Service{Pool: c.pool}).CostRoutes(r) // FTR.HMR.DEV-0004 R4–R7: the cost of a feature
+			// FTR.HMR.DEV-0004 R8–R11: the log of a run of an agent
+			(&runlog.Service{Pool: c.pool, Nabu: nabu.New(c.cfg.NabuURL, c.cfg.NabuClientID, c.cfg.NabuClientSecret),
+				Config: runlog.Config{PerUser: c.cfg.RunLogStreamsPerUser, Max: c.cfg.RunLogStreamsMax, Retention: c.cfg.RunLogRetention}}).Routes(r)
 			gates.NewHandlers(sl.gates).Routes(r)
 			approvals.NewHandlers(approvalSvc).Routes(r)
 			sl.codegen.Routes(r)

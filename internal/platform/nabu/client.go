@@ -344,6 +344,38 @@ func ReadEvents(ctx context.Context, eventsURL, token string, onEvent func(RunEv
 	}
 }
 
+// StreamEvents reads the events of a run with the token of the client, after
+// the event number after, until "completed" or the end of ctx (FTR.HMR.DEV-0004
+// R8, R9: the log of a run). A broken stream is read again from the last event;
+// onReconnect tells the reader. A run Nabu no longer has is a 404 *APIError.
+func (c *Client) StreamEvents(ctx context.Context, runID string, after int, onEvent func(RunEvent), onReconnect func()) error {
+	last := after
+	for attempt := 0; ; attempt++ {
+		tok, err := c.Token(ctx)
+		if err != nil {
+			return err
+		}
+		done, err := readEventsOnce(ctx, c.URL+"/client/v1/runs/"+url.PathEscape(runID)+"/events", tok, &last, onEvent)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if done {
+			return err
+		}
+		if attempt >= 5 {
+			return fmt.Errorf("%w: events: %v", ErrUnavailable, err)
+		}
+		if onReconnect != nil {
+			onReconnect()
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Duration(attempt+1) * time.Second):
+		}
+	}
+}
+
 func readEventsOnce(ctx context.Context, eventsURL, token string, last *int, onEvent func(RunEvent)) (bool, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, eventsURL, nil)
 	if err != nil {
