@@ -191,6 +191,12 @@ func TestRunLog(t *testing.T) {
 	if len(evs) != 4 || entry(evs[0]).Kind != runlog.KindTool || entry(evs[0]).Result == nil {
 		t.Fatalf("LOG-06 resumed %+v", evs)
 	}
+	// a reader resuming after the end of a finished run gets no «expired»
+	resp, done = open(expert, codeRun, "6.2")
+	if evs := read(resp, nil); len(evs) != 2 || entry(evs[0]).Kind != runlog.KindStep {
+		t.Fatalf("resumed after the end %+v", evs)
+	}
+	done()
 	// LOG-07, LOG-12: the run of the writer — a broken stream is told, no steps of Hammurapi
 	resp, done = open(expert, writerRun, "")
 	evs = read(resp, nil)

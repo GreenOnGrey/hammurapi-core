@@ -293,7 +293,8 @@ func (s *Service) serve(w http.ResponseWriter, r *http.Request) error {
 				send(a.add(e))
 			}
 			send(a.close())
-			if err != nil && nabu.IsNotFound(err) || err == nil && got == 0 && rn.finished {
+			// a reader that resumes after the end of a finished run gets nothing, not «expired»
+			if err != nil && nabu.IsNotFound(err) || err == nil && got == 0 && rn.finished && after == 0 {
 				expired()
 				return nil
 			}
