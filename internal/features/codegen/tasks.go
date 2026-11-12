@@ -50,6 +50,25 @@ type TaskInput struct {
 	Autonomy     string `json:"autonomy,omitempty"`
 	Reason       string `json:"reason,omitempty"`
 	ReviewAuthor string `json:"reviewAuthor,omitempty"`
+	// RetryOf is the failed task this one repeats (FTR.HMR.DEV-0004 R5: the reason «retry» of its cost).
+	RetryOf string `json:"retryOf,omitempty"`
+}
+
+// ReasonOf is the reason of the run of a code task in the cost of the feature (FTR.HMR.DEV-0004 arch §4.1).
+func ReasonOf(t *cycledata.Task) string {
+	var in TaskInput
+	_ = json.Unmarshal(t.Input, &in)
+	switch {
+	case in.RetryOf != "":
+		return "retry"
+	case t.Type == TaskReview:
+		return "review"
+	case t.Type == TaskUpdatePR:
+		return "update_pr"
+	case t.Type == TaskRevert:
+		return "revert"
+	}
+	return "first"
 }
 
 // AutofixAuthor is the author of the review comment of an automatic fix of

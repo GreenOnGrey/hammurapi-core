@@ -410,6 +410,7 @@ func (s *Service) RetryTask(ctx context.Context, p *domain.Principal, key string
 		}
 		var in TaskInput
 		_ = json.Unmarshal(t.Input, &in)
+		in.RetryOf = t.ID.String() // FTR.HMR.DEV-0004 R5: the cost of the retry is a run with the reason «retry»
 		if _, err := StartTask(ctx, tx.Q(), TaskSpec{Type: t.Type, FeatureID: t.FeatureID, ReleaseID: t.ReleaseID, ServiceID: t.ServiceID,
 			Initiator: &p.UserID, Input: in, Parent: run.ParentID}); err != nil {
 			return err

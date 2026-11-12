@@ -723,7 +723,7 @@ func (e *Effects) Check(ctx context.Context, _ workflows.RunRef, payload json.Ra
 	}
 	out, err := e.Runner.Once(ctx, agent.ScenarioConformanceCheck, mcp.Grant{Mode: mcp.ModeCheck, ContextType: "feature", ContextKey: f.UniqueID, Feature: f.UniqueID, Subject: f.ID},
 		agentrun.System, b.String())
-	e.Runner.Record(ctx, agent.ScenarioConformanceCheck, out, usage.Record{Context: "check", FeatureID: &f.ID})
+	e.Runner.Record(ctx, agent.ScenarioConformanceCheck, out, usage.Record{Context: "check", FeatureID: &f.ID, Reason: "check"})
 	if err != nil {
 		if agentrun.IsNoAgent(err) {
 			return nil, nil

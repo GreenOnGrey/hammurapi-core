@@ -397,6 +397,11 @@ func (c *Code) Poll(ctx context.Context, run workflows.RunRef, payload json.RawM
 	if err != nil {
 		return nil, err
 	}
+	if len(r.Usage) > 0 && string(r.Usage) != "null" { // FTR.HMR.DEV-0004 R4: the cost of a running task
+		if _, err := c.Pool.Exec(ctx, `UPDATE agent_tasks SET usage = $2 WHERE id = $1`, in.TaskID, r.Usage); err != nil {
+			return nil, err
+		}
+	}
 	switch r.Status {
 	case "succeeded", "failed", "cancelled":
 	default:
@@ -605,9 +610,13 @@ func recordUsage(ctx context.Context, q postgres.Querier, t *cycledata.Task, res
 	if u.IsZero() {
 		return nil
 	}
+	// FTR.HMR.DEV-0004 arch §4.1: the run of Nabu, the service and the reason of the run
 	_, err := q.Exec(ctx, `INSERT INTO agent_usage (context, scenario, model, feature_id, release_id, task_id, user_id,
-		tokens_in, tokens_out, cache_read, cache_write, cost_usd) VALUES ('codegen',$1::agent_scenario,'nabu',$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-		string(ScenarioOf(t.Type)), t.FeatureID, t.ReleaseID, t.ID, t.InitiatorID, u.TokensIn, u.TokensOut, u.CacheRead, u.CacheWrite, u.CostUSD)
+		tokens_in, tokens_out, cache_read, cache_write, cost_usd, nabu_run_id, service_id, reason, cost_known)
+		SELECT 'codegen',$1::agent_scenario,'nabu',$2,$3,$4,$5,$6,$7,$8,$9,$10, t.nabu_run_id, t.service_id, $11, $12
+		FROM agent_tasks t WHERE t.id = $4`,
+		string(ScenarioOf(t.Type)), t.FeatureID, t.ReleaseID, t.ID, t.InitiatorID, u.TokensIn, u.TokensOut, u.CacheRead, u.CacheWrite, u.CostUSD,
+		ReasonOf(t), u.PriceKnown())
 	return err
 }
 

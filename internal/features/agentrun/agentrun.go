@@ -34,6 +34,8 @@ type Runner struct {
 
 // Outcome is the result of a session.
 type Outcome struct {
+	// RunID is the run of Nabu: the log of the run opens by it (FTR.HMR.DEV-0004 R11).
+	RunID        string
 	Text         string
 	Usage        agent.Usage
 	Model        string
@@ -124,5 +126,8 @@ func (r *Runner) Record(ctx context.Context, sc agent.Scenario, out Outcome, rec
 		return
 	}
 	rec.Scenario, rec.Usage, rec.Model, rec.ConnectionID = sc, out.Usage, out.Model, out.ConnectionID
+	if id, err := uuid.Parse(out.RunID); err == nil && rec.RunID == nil {
+		rec.RunID = &id
+	}
 	_ = r.Usage.Add(context.WithoutCancel(ctx), rec)
 }

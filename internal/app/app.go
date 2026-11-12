@@ -475,6 +475,7 @@ func RunAPI(ctx context.Context, cfg *config.Config) error {
 			sl.metrics.Routes(r) // FTR.HMR.DISC-0001 R23: the sources to choose from
 			sl.spec.Routes(r)
 			features.NewHandlers(sl.features).Routes(r)
+			(&usage.Service{Pool: c.pool}).CostRoutes(r) // FTR.HMR.DEV-0004 R4–R7: the cost of a feature
 			gates.NewHandlers(sl.gates).Routes(r)
 			approvals.NewHandlers(approvalSvc).Routes(r)
 			sl.codegen.Routes(r)

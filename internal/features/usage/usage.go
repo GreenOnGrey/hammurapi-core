@@ -79,6 +79,12 @@ type Record struct {
 	FeatureID    *uuid.UUID
 	ReleaseID    *uuid.UUID
 	TaskID       *uuid.UUID
+	// FTR.HMR.DEV-0004 arch §4.1: the run of Nabu, the gates of a run of the
+	// writer, the service of a code task and the reason of the run.
+	RunID     *uuid.UUID
+	Areas     []string
+	ServiceID *uuid.UUID
+	Reason    string
 	agent.Usage
 }
 
@@ -90,10 +96,15 @@ func (s *Service) Add(ctx context.Context, r Record) error {
 	if r.Context == "" {
 		r.Context = string(r.Scenario)
 	}
+	areas := r.Areas
+	if areas == nil {
+		areas = []string{}
+	}
 	_, err := s.Pool.Exec(ctx, `INSERT INTO agent_usage (context, scenario, connection_id, model, user_id, issue_id, feature_id, release_id, task_id,
-		tokens_in, tokens_out, cache_read, cache_write, cost_usd) VALUES ($1,$2::agent_scenario,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+		tokens_in, tokens_out, cache_read, cache_write, cost_usd, nabu_run_id, areas, service_id, reason, cost_known)
+		VALUES ($1,$2::agent_scenario,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NULLIF($18,''),$19)`,
 		r.Context, string(r.Scenario), r.ConnectionID, r.Model, r.UserID, r.IssueID, r.FeatureID, r.ReleaseID, r.TaskID,
-		r.TokensIn, r.TokensOut, r.CacheRead, r.CacheWrite, r.CostUSD)
+		r.TokensIn, r.TokensOut, r.CacheRead, r.CacheWrite, r.CostUSD, r.RunID, areas, r.ServiceID, r.Reason, r.PriceKnown())
 	return err
 }
 
