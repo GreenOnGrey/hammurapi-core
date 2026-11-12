@@ -126,7 +126,7 @@ func ReadChanges(r io.Reader) ([]git.FileChange, string, []string, error) {
 		files[h.Name] = b
 	}
 	var out []git.FileChange
-	var warnings, protected []string
+	var warnings, protected, deps []string
 	plan := ""
 	for _, ch := range manifest.Changes {
 		p := path.Clean(ch.Path)
@@ -140,6 +140,9 @@ func ReadChanges(r io.Reader) ([]git.FileChange, string, []string, error) {
 		}
 		if ch.Op != "added" && protectedPath(p) { // FTR.HMR.CMN-0008 R17
 			protected = append(protected, p)
+		}
+		if dependencyPath(p, ch.Op) { // FTR.HMR.DEV-0004 R16
+			deps = append(deps, p)
 		}
 		switch ch.Op {
 		case "deleted":
@@ -159,6 +162,10 @@ func ReadChanges(r io.Reader) ([]git.FileChange, string, []string, error) {
 	if len(protected) > 0 {
 		sort.Strings(protected)
 		warnings = append(warnings, warningProtected+strings.Join(protected, ", "))
+	}
+	if len(deps) > 0 {
+		sort.Strings(deps)
+		warnings = append([]string{warningDependencies + listPaths(deps)}, warnings...)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
 	return out, plan, warnings, nil

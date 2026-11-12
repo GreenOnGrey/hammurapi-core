@@ -96,6 +96,10 @@ func Prompt(d *Description) string {
 	}
 	// FTR.HMR.SPEC-0004 R8: the contract agreed at the gate tech
 	speccontract.WriteContracts(&b, d.Contracts, "\n=== contract tech/%s — implement the API exactly as agreed ===\n")
+	// FTR.HMR.DEV-0004 R15: the agent does not work around a dependency it cannot fetch
+	b.WriteString("\nDependencies: never point a dependency to a local copy — no `replace` to a local path in go.mod, no `file:` or `link:` " +
+		"in package.json, no `path =` or `-e ./` in Python — and never copy the code of another module into the repository (vendor/, third_party/). " +
+		"If a dependency cannot be downloaded, stop working around it and name it in the summary.\n")
 	b.WriteString("\nReport progress with report_progress. End with a short summary and the line \"Implemented: R1, R2\".")
 	return b.String()
 }
