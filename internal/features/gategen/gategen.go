@@ -1133,7 +1133,13 @@ func (e *Effects) session(ctx context.Context, run workflows.RunRef, f *specdata
 	res, err := e.Runner.Once(sctx, agent.ScenarioGateGeneration, mcp.Grant{UserID: req.Initiator, Mode: mcp.ModeGenerate, ContextType: "feature", ContextKey: f.UniqueID,
 		Feature: f.UniqueID, Subject: f.ID, Writer: &mcp.WriterScope{Mode: req.mode(), Areas: req.Areas}}, agentrun.System, Prompt(f, req, d))
 	metrics.SpecRunDuration.WithLabelValues(req.mode()).Observe(time.Since(started).Seconds())
-	e.Runner.Record(ctx, agent.ScenarioGateGeneration, res, usage.Record{Context: "gate", FeatureID: &f.ID, UserID: &req.Initiator})
+	// FTR.HMR.DEV-0004 R4, R4a: the gates of the run and its reason, for the cost of every gate
+	areas := make([]string, 0, len(req.Areas))
+	for _, a := range req.Areas {
+		areas = append(areas, string(a))
+	}
+	e.Runner.Record(ctx, agent.ScenarioGateGeneration, res, usage.Record{Context: "gate", FeatureID: &f.ID, UserID: &req.Initiator,
+		Areas: areas, Reason: reasonOf(ctx, q, f.ID, req, areas, d.Requests)})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1225,4 +1231,30 @@ func (e *Effects) DoTrace(ctx context.Context, _ workflows.RunRef, payload json.
 		slog.WarnContext(ctx, "generated tech specification names unknown services", "feature", f.UniqueID, "services", res.UnknownServices)
 	}
 	return nil, nil
+}
+
+// reasonOf is the reason of a run of the writer in the cost of the feature
+// (FTR.HMR.DEV-0004 arch §4.1): the check of the gates below a changed one, an
+// instruction from the chat, answers to questions, or a first or a repeated
+// generation of its gates — repeated when an earlier run of the writer wrote one
+// of them (a run before the attribution counts as such).
+func reasonOf(ctx context.Context, q postgres.Querier, featureID uuid.UUID, req Request, areas []string, reqs []SpecRequest) string {
+	if req.mode() == ModeImpact {
+		return "impact"
+	}
+	for _, r := range reqs {
+		if strings.TrimSpace(r.Instructions) != "" {
+			return "request"
+		}
+	}
+	if len(reqs) > 0 {
+		return "answers"
+	}
+	var earlier bool
+	_ = q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM agent_usage WHERE feature_id = $1 AND context = 'gate'
+		AND (areas && $2::text[] OR cardinality(areas) = 0))`, featureID, areas).Scan(&earlier)
+	if earlier {
+		return "regenerate"
+	}
+	return "generate"
 }

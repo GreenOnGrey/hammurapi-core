@@ -69,6 +69,7 @@ func (r *Runner) onceNabu(ctx context.Context, agentName string, sc agent.Scenar
 	if err != nil {
 		return out, nabuStartErr(agentName, err)
 	}
+	out.RunID = started.RunID
 	var b strings.Builder
 	var failure *nabuFailure
 	err = nabu.ReadEvents(ctx, started.EventsURL, started.EventsToken, func(e nabu.RunEvent) {

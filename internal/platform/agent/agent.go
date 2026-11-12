@@ -78,16 +78,26 @@ type Usage struct {
 	CacheRead  int64   `json:"cacheRead,omitempty"`
 	CacheWrite int64   `json:"cacheWrite,omitempty"`
 	CostUSD    float64 `json:"costUsd,omitempty"`
+	// CostKnown is false when Nabu does not know the price of a model of the
+	// run: CostUSD is then zero, not free (FTR.HMR.DEV-0004 R6). nil — known.
+	CostKnown *bool `json:"costKnown,omitempty"`
 }
 
-// Add accumulates u2 into u.
+// Add accumulates u2 into u; an unknown price of u2 makes the total unknown.
 func (u *Usage) Add(u2 Usage) {
 	u.TokensIn += u2.TokensIn
 	u.TokensOut += u2.TokensOut
 	u.CacheRead += u2.CacheRead
 	u.CacheWrite += u2.CacheWrite
 	u.CostUSD += u2.CostUSD
+	if u2.CostKnown != nil && !*u2.CostKnown {
+		f := false
+		u.CostKnown = &f
+	}
 }
+
+// PriceKnown tells whether the cost is a price, not a zero of an unknown one.
+func (u Usage) PriceKnown() bool { return u.CostKnown == nil || *u.CostKnown }
 
 // IsZero reports whether nothing was used.
 func (u Usage) IsZero() bool {
