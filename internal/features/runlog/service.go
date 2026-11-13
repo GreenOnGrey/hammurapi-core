@@ -118,7 +118,9 @@ func (s *Service) findRun(ctx context.Context, featureID, runID uuid.UUID) (*run
 	if !postgres.IsNoRows(err) {
 		return nil, err
 	}
-	err = s.Pool.QueryRow(ctx, `SELECT created_at FROM agent_usage WHERE feature_id = $1 AND nabu_run_id = $2 ORDER BY created_at LIMIT 1`,
+	err = s.Pool.QueryRow(ctx, `SELECT created_at FROM agent_usage WHERE nabu_run_id = $2 AND (feature_id = $1
+		OR (feature_id IS NULL AND context = 'discovery' AND issue_id IN (SELECT issue_id FROM feature_issues WHERE feature_id = $1)))
+		ORDER BY created_at LIMIT 1`,
 		featureID, runID).Scan(&r.started)
 	if postgres.IsNoRows(err) {
 		return nil, apperr.NotFound("run_not_found", "the run is not a run of this feature")
