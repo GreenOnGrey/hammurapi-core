@@ -19,6 +19,12 @@ import (
 const SpecRule = " The documents of a feature are written only by the writer agent of Hammurapi. Never write or rewrite them yourself, " +
 	"not in the chat and not in a file. To change one, clear up with the user what to change, then call request_spec_revision."
 
+// CodeRegenerationToolDescription is the description of request_code_regeneration (FTR.HMR.DEV-0004 R20).
+const CodeRegenerationToolDescription = "Run the agent of code of one service of the feature open in the chat of Hammurapi again, when its last run is done. " +
+	"The agent works over the current code of the service branch and gets the comments and the failed CI checks of its PR by itself; " +
+	"comment adds what the user wants changed. The PR is updated, not replaced. " +
+	"This is the only way to change the code of a feature: never write code yourself. Confirm the service and the comment with the user before calling."
+
 // SpecRevisionToolDescription is the contract of the personal agent (R12, R17, R32).
 const SpecRevisionToolDescription = "Give the writer agent a brief to change the specification of the feature open in the chat of Hammurapi. " +
 	"This is the only way to change a specification: never write a document yourself, in the chat or in a file. " +

@@ -453,6 +453,21 @@ func (mr *MockProviderMockRecorder) PRChangedFiles(ctx, token, number any) *gomo
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PRChangedFiles", reflect.TypeOf((*MockProvider)(nil).PRChangedFiles), ctx, token, number)
 }
 
+// PRFeedback mocks base method.
+func (m *MockProvider) PRFeedback(ctx context.Context, token string, number int, sha string) (*git.PRFeedback, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "PRFeedback", ctx, token, number, sha)
+	ret0, _ := ret[0].(*git.PRFeedback)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// PRFeedback indicates an expected call of PRFeedback.
+func (mr *MockProviderMockRecorder) PRFeedback(ctx, token, number, sha any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "PRFeedback", reflect.TypeOf((*MockProvider)(nil).PRFeedback), ctx, token, number, sha)
+}
+
 // ParseHook mocks base method.
 func (m *MockProvider) ParseHook(h http.Header, body []byte) (*git.HookEvent, error) {
 	m.ctrl.T.Helper()

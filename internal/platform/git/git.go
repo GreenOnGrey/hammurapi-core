@@ -202,6 +202,9 @@ type Provider interface {
 	// CommitCI is the status of the checks of a commit: success, failure, pending or none
 	// (FTR.HMR.DEV-0004 R17).
 	CommitCI(ctx context.Context, token, sha string) (string, error)
+	// PRFeedback is what a PR says about its code: the comments and the checks of sha that failed
+	// (FTR.HMR.DEV-0004 R18).
+	PRFeedback(ctx context.Context, token string, number int, sha string) (*PRFeedback, error)
 	// ParseHook normalizes push, tag, PR/MR, review, comment and check webhooks; nil for others.
 	ParseHook(h http.Header, body []byte) (*HookEvent, error)
 

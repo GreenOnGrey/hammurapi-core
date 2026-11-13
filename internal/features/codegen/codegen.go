@@ -23,6 +23,7 @@ import (
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/features"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/workflows"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/events"
+	"github.com/GreenOnGrey/hammurapi-core/internal/platform/git"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/httpx"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/postgres"
 	"github.com/GreenOnGrey/hammurapi-core/internal/specdata"
@@ -178,6 +179,8 @@ func (m Machine) evaluate(ctx context.Context, tx pgx.Tx, run *workflows.Run, f 
 type Service struct {
 	store  specdata.Store
 	events events.Publisher
+	// Git reads the comments and the checks of a PR for a regeneration (FTR.HMR.DEV-0004 R19).
+	Git git.Provider
 	// Closed archives the topics of the specification of a feature that left it (FTR.HMR.DEV-0001 R20).
 	Closed func(ctx context.Context, featureID uuid.UUID)
 }
@@ -498,6 +501,7 @@ func (s *Service) ReviewComment(ctx context.Context, pr *cycledata.PR, body, aut
 
 // Routes mounts the codegen endpoints.
 func (s *Service) Routes(r chi.Router) {
+	s.regenerateRoute(r)
 	r.Post("/features/{key}/codegen", httpx.Handler(func(w http.ResponseWriter, r *http.Request) error {
 		p, err := httpx.MustPrincipal(r)
 		if err != nil {
