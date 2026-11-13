@@ -1,8 +1,9 @@
 package usage
 
 // The cost of a feature (FTR.HMR.DEV-0004 R4–R7, R4a, tech §API): every run of
-// an agent by gate, service, checks and the runs recorded before the
-// attribution, in money and tokens.
+// an agent by stage — the research of its issues, the gates and the runs of the
+// writer recorded before the attribution, the services, the checks — in money
+// and tokens.
 
 import (
 	"context"
@@ -23,10 +24,11 @@ import (
 
 // Kinds of an item of the cost of a feature.
 const (
-	CostArea    = "area"
-	CostService = "service"
-	CostChecks  = "checks"
-	CostLegacy  = "legacy"
+	CostResearch = "research"
+	CostArea     = "area"
+	CostService  = "service"
+	CostChecks   = "checks"
+	CostLegacy   = "legacy"
 )
 
 // logRetention is how long Nabu keeps the events of a run (FTR.HMR.DEV-0004 R10).
@@ -80,7 +82,7 @@ type CostSum struct {
 	Tokens      Tokens  `json:"tokens"`
 }
 
-// CostItem is a gate, a service, the checks or the runs before the attribution.
+// CostItem is the research, a gate, the runs of the writer before the attribution, a service or the checks.
 type CostItem struct {
 	Kind string  `json:"kind"`
 	Key  *string `json:"key"`
@@ -112,8 +114,8 @@ type costRow struct {
 	running    bool
 }
 
-// FeatureCost reads the cost of a feature; detail ("<kind>:<key>", "checks",
-// "legacy") adds the runs of one item.
+// FeatureCost reads the cost of a feature; detail ("<kind>:<key>", "research",
+// "checks", "legacy") adds the runs of one item.
 func (s *Service) FeatureCost(ctx context.Context, featureID uuid.UUID, detail string, now time.Time) (*FeatureCost, error) {
 	rows, err := s.Pool.Query(ctx, `SELECT u.id, u.nabu_run_id, u.created_at, u.reason, COALESCE(u.model, ''), u.cost_known, u.areas,
 		COALESCE(s.key, ts.key), u.scenario::text, u.context, u.tokens_in, u.tokens_out, u.cache_read, u.cache_write, u.cost_usd::float8,
@@ -123,6 +125,7 @@ func (s *Service) FeatureCost(ctx context.Context, featureID uuid.UUID, detail s
 		LEFT JOIN agent_tasks t ON t.id = u.task_id
 		LEFT JOIN services ts ON ts.id = t.service_id
 		WHERE u.feature_id = $1
+			OR (u.feature_id IS NULL AND u.context = 'discovery' AND u.issue_id IN (SELECT issue_id FROM feature_issues WHERE feature_id = $1))
 		ORDER BY u.created_at DESC`, featureID)
 	if err != nil {
 		return nil, err
@@ -181,9 +184,12 @@ func (s *Service) runningTasks(ctx context.Context, featureID uuid.UUID) ([]cost
 }
 
 // itemsOf are the items a run counts in, with its share: a run of the writer
-// for several gates is split evenly (R4a, arch A2).
+// for several gates is split evenly (R4a, arch A2). The analysis of an issue of
+// the feature is its research (R7).
 func itemsOf(r costRow) (keys []string, share float64) {
 	switch {
+	case r.context == "discovery":
+		return []string{CostResearch}, 1
 	case len(r.areas) > 0:
 		for _, a := range r.areas {
 			keys = append(keys, CostArea+":"+a)
@@ -243,7 +249,8 @@ func groupCost(all []costRow, detail string, now time.Time) *FeatureCost {
 			}
 		}
 	}
-	var order []string
+	// the stages in their order: research, specification, the changes of the services, the check (R7)
+	order := []string{CostResearch}
 	for _, a := range areaOrder {
 		order = append(order, CostArea+":"+a)
 	}
@@ -254,8 +261,9 @@ func groupCost(all []costRow, detail string, now time.Time) *FeatureCost {
 		}
 	}
 	slices.Sort(services)
+	order = append(order, CostLegacy)
 	order = append(order, services...)
-	order = append(order, CostChecks, CostLegacy)
+	order = append(order, CostChecks)
 	for _, k := range order {
 		if it := items[k]; it != nil {
 			out.Items = append(out.Items, *it)

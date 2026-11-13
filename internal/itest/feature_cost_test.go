@@ -69,6 +69,16 @@ func TestFeatureCost(t *testing.T) {
 	// CKN-03: a run on a model without a price
 	must(t, us.Add(ctx, usage.Record{Context: "gate", Scenario: agent.ScenarioGateGeneration, FeatureID: &feature, Areas: []string{"tech"},
 		Reason: "request", Usage: agent.Usage{TokensIn: 40, CostKnown: &f}}))
+	// COST-21: the analysis of an issue of the feature is its research; the analysis of another issue is not
+	var issue, other uuid.UUID
+	must(t, db.QueryRow(ctx, `INSERT INTO issues (key, domain_id, number, type, title, description, source)
+		SELECT 'FMS-1', domain_id, 1, 'idea', 'Скидка', '', 'manual' FROM systems WHERE key = 'CAR' RETURNING id`).Scan(&issue))
+	must(t, db.QueryRow(ctx, `INSERT INTO issues (key, domain_id, number, type, title, description, source)
+		SELECT 'FMS-2', domain_id, 2, 'idea', 'Другое', '', 'manual' FROM systems WHERE key = 'CAR' RETURNING id`).Scan(&other))
+	_, err = db.Exec(ctx, `INSERT INTO feature_issues (feature_id, issue_id) VALUES ($1, $2)`, feature, issue)
+	must(t, err)
+	must(t, us.Add(ctx, usage.Record{Context: "discovery", Scenario: agent.ScenarioIssueAnalysis, IssueID: &issue, Usage: agent.Usage{TokensIn: 5, CostUSD: 0.4}}))
+	must(t, us.Add(ctx, usage.Record{Context: "discovery", Scenario: agent.ScenarioIssueAnalysis, IssueID: &other, Usage: agent.Usage{TokensIn: 5, CostUSD: 9}}))
 	// COST-03: the retry of the failed task; its reason comes from the input of the task
 	retry := task("succeeded", `{"retryOf":"`+failed.String()+`"}`)
 	tk, err := cycledata.New(db).TaskByID(ctx, retry)
@@ -102,10 +112,13 @@ func TestFeatureCost(t *testing.T) {
 	if code != 200 || c.CanViewLog {
 		t.Fatalf("COST-10 a reader sees the cost, not the log: %d %v", code, c.CanViewLog)
 	}
-	if c.Total.Runs != 4 || c.Total.UnknownRuns != 1 || !near(c.Total.CostUSD, 1.22+3+35.18) {
+	if c.Total.Runs != 5 || c.Total.UnknownRuns != 1 || !near(c.Total.CostUSD, 0.4+1.22+3+35.18) {
 		t.Fatalf("COST-07 total %+v", c.Total)
 	}
-	tech := c.Items[0]
+	if res := c.Items[0]; res.Kind != usage.CostResearch || res.Runs != 1 || !near(res.CostUSD, 0.4) {
+		t.Fatalf("COST-21 research %+v", res)
+	}
+	tech := c.Items[1]
 	if tech.Key == nil || *tech.Key != "tech" || tech.Runs != 3 || len(tech.List) != 3 || !near(tech.CostUSD, 1.22+1.5) {
 		t.Fatalf("COST-01 tech %+v", tech)
 	}
@@ -116,7 +129,7 @@ func TestFeatureCost(t *testing.T) {
 	if fmtList(reasons) != "[request regenerate generate]" || tech.List[0].CostUSD != nil {
 		t.Fatalf("COST-01, CKN-03 runs %v", reasons)
 	}
-	if svc := c.Items[2]; svc.Kind != usage.CostService || *svc.Key != "booking" || !near(svc.CostUSD, 35.18) {
+	if svc := c.Items[3]; svc.Kind != usage.CostService || *svc.Key != "booking" || !near(svc.CostUSD, 35.18) {
 		t.Fatalf("COST-20 the old row of the code task %+v", svc)
 	}
 	if _, c := get(expert, "/features/FTR.FMS.CAR-0005/cost"); !c.CanViewLog || c.Items[0].List != nil {
@@ -125,9 +138,10 @@ func TestFeatureCost(t *testing.T) {
 	if code, _ := get(reader, "/features/FTR.FMS.CAR-0404/cost"); code != 404 {
 		t.Fatalf("COST-10 an unknown feature: %d", code)
 	}
-	// COST-09: the usage of administrators counts the same rows
+	// COST-09: the usage of administrators counts the same rows: those of the feature and the analysis of its issues
 	var sum float64
-	must(t, db.QueryRow(ctx, `SELECT COALESCE(sum(cost_usd), 0)::float8 FROM agent_usage WHERE feature_id = $1 AND cost_known`, feature).Scan(&sum))
+	must(t, db.QueryRow(ctx, `SELECT COALESCE(sum(cost_usd), 0)::float8 FROM agent_usage WHERE cost_known AND (feature_id = $1
+		OR (feature_id IS NULL AND context = 'discovery' AND issue_id IN (SELECT issue_id FROM feature_issues WHERE feature_id = $1)))`, feature).Scan(&sum))
 	if !near(sum, c.Total.CostUSD) {
 		t.Fatalf("COST-09 %v != %v", sum, c.Total.CostUSD)
 	}
