@@ -590,7 +590,16 @@ func storePR(ctx context.Context, cd *cycledata.DB, t *cycledata.Task, res Resul
 	} else if err != nil {
 		return err
 	}
-	pr.URL, pr.Branch, pr.HeadSHA = res.PRURL, res.Branch, res.HeadSHA
+	// a task that changed nothing (an answer in the PR) knows only the number: the PR keeps its link and branch
+	if res.PRURL != "" {
+		pr.URL = res.PRURL
+	}
+	if res.Branch != "" {
+		pr.Branch = res.Branch
+	}
+	if res.HeadSHA != "" {
+		pr.HeadSHA = res.HeadSHA
+	}
 	if res.PRTitle != "" {
 		// FTR.HMR.DEV-0004 R2: the title Hammurapi gave the PR, not the answer of
 		// the agent; the webhook of the PR keeps it in sync afterwards.

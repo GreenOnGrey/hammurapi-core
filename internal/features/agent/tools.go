@@ -81,6 +81,8 @@ type ToolDeps struct {
 	// RequestSpecRevision gives the brief of an expert to the writer of
 	// specifications (FTR.HMR.DEV-0001 R12, R17) and returns the answer for the agent.
 	RequestSpecRevision func(ctx context.Context, p *domain.Principal, g mcp.Grant, b SpecBrief) (string, error)
+	// RegenerateCode runs the agent of a service of a feature again (FTR.HMR.DEV-0004 R20).
+	RegenerateCode func(ctx context.Context, p *domain.Principal, featureKey, service, comment string) (string, error)
 	// ReadSpecQuestions answers read_spec_questions.
 	ReadSpecQuestions func(ctx context.Context, p *domain.Principal, featureKey string) (string, error)
 	// SimilarFeaturesCost answers similar_features_cost (FTR.HMR.DISC-0001 tech §4.4).
@@ -676,6 +678,34 @@ func Tools(d ToolDeps) []mcp.Tool {
 					return "", err
 				}
 				out, err := d.RequestSpecRevision(ctx, p, g, a)
+				return out, toolErr(err)
+			},
+		},
+		{
+			Name:        "request_code_regeneration",
+			Description: CodeRegenerationToolDescription,
+			Modes:       []string{mcp.ModeNabu},
+			InputSchema: schema(map[string]any{
+				"featureKey": map[string]any{"type": "string", "description": "Key of the feature, e.g. FTR.FMS.CAR-0005"},
+				"service":    map[string]any{"type": "string", "description": "Key of the service whose code to regenerate, as list_features or the Implementation tab names it"},
+				"comment": map[string]any{"type": "string", "maxLength": 4000,
+					"description": "What the agent of code should do differently, understandable without the conversation, up to 4000 characters; empty — only the comments and the CI of the PR"},
+			}, "featureKey", "service"),
+			Handler: func(ctx context.Context, g mcp.Grant, raw json.RawMessage) (string, error) {
+				var a struct {
+					FeatureKey string `json:"featureKey"`
+					Service    string `json:"service"`
+					Comment    string `json:"comment"`
+				}
+				_ = json.Unmarshal(raw, &a)
+				if d.RegenerateCode == nil {
+					return "", &mcp.ToolError{Msg: "not available in this context"}
+				}
+				p, err := d.Principal(ctx, g.UserID)
+				if err != nil {
+					return "", err
+				}
+				out, err := d.RegenerateCode(ctx, p, a.FeatureKey, a.Service, a.Comment)
 				return out, toolErr(err)
 			},
 		},

@@ -15,6 +15,7 @@ import (
 	"github.com/GreenOnGrey/hammurapi-core/internal/cycledata"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/workflows"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/events"
+	"github.com/GreenOnGrey/hammurapi-core/internal/platform/git"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/metrics"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/postgres"
 )
@@ -52,6 +53,10 @@ type TaskInput struct {
 	ReviewAuthor string `json:"reviewAuthor,omitempty"`
 	// RetryOf is the failed task this one repeats (FTR.HMR.DEV-0004 R5: the reason «retry» of its cost).
 	RetryOf string `json:"retryOf,omitempty"`
+	// Regenerate: the agent runs again over the code of the service after it succeeded, with the
+	// comments and the failed checks of its PR (FTR.HMR.DEV-0004 R18, R19).
+	Regenerate bool            `json:"regenerate,omitempty"`
+	Feedback   *git.PRFeedback `json:"feedback,omitempty"`
 }
 
 // ReasonOf is the reason of the run of a code task in the cost of the feature (FTR.HMR.DEV-0004 arch §4.1).
@@ -61,6 +66,8 @@ func ReasonOf(t *cycledata.Task) string {
 	switch {
 	case in.RetryOf != "":
 		return "retry"
+	case in.Regenerate:
+		return "regenerate"
 	case t.Type == TaskReview:
 		return "review"
 	case t.Type == TaskUpdatePR:

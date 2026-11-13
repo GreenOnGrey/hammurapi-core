@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -120,5 +121,26 @@ func TestSpecTools(t *testing.T) {
 		if !strings.Contains(SpecRevisionToolDescription, want) {
 			t.Errorf("no %q", want)
 		}
+	}
+}
+
+// FTR.HMR.DEV-0004 qa REG-07: the personal agent regenerates the code of a service from the chat, never writes it itself.
+func TestCodeRegenerationTool(t *testing.T) {
+	var tool *mcp.Tool
+	for _, x := range Tools(ToolDeps{}) {
+		if x.Name == "request_code_regeneration" {
+			tool = &x
+		}
+	}
+	if tool == nil || len(tool.Modes) != 1 || tool.Modes[0] != mcp.ModeNabu || tool.ReadOnly {
+		t.Fatalf("tool %+v", tool)
+	}
+	for _, want := range []string{"comments and the failed CI checks", "never write code yourself", "Confirm the service and the comment"} {
+		if !strings.Contains(CodeRegenerationToolDescription, want) {
+			t.Errorf("no %q", want)
+		}
+	}
+	if out, err := tool.Handler(context.Background(), mcp.Grant{}, []byte(`{"featureKey":"FTR.FMS.CAR-0005","service":"pricing"}`)); err == nil {
+		t.Fatalf("without the dependency: %q", out)
 	}
 }

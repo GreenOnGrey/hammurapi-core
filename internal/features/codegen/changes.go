@@ -182,14 +182,18 @@ func commit(ctx context.Context, p git.Provider, token string, d *Description, r
 		return res
 	}
 	if len(changes) == 0 {
-		if d.Type == TaskReview && d.Input.PRNumber > 0 {
-			// The agent answered in the discussion instead of changing code.
+		// The agent answered in the discussion instead of changing code; a regeneration may find the code right (FTR.HMR.DEV-0004 R18).
+		if (d.Type == TaskReview || d.Input.Regenerate) && d.Input.PRNumber > 0 {
 			if err := p.CommentPR(ctx, token, d.Input.PRNumber, "Hammurapi agent: "+strings.TrimSpace(text)); err != nil {
 				res.step(StepComment, StepFailed, err.Error())
 				return withErr(res, ClassGit, err)
 			}
 			res.step(StepComment, StepOK, fmt.Sprintf("#%d", d.Input.PRNumber))
 			res.Status, res.PRNumber = "succeeded", d.Input.PRNumber
+			return res
+		}
+		if d.Input.Regenerate { // no PR to answer in: the summary of the agent is the result
+			res.Status = "succeeded"
 			return res
 		}
 		return withErr(res, ClassNoChanges, errors.New("the agent made no changes"))
@@ -263,6 +267,9 @@ func commit(ctx context.Context, p git.Provider, token string, d *Description, r
 		res.step(StepPR, StepOK, fmt.Sprintf("updated #%d", number))
 		if d.Type == TaskReview {
 			_ = p.CommentPR(ctx, token, number, "Hammurapi agent addressed the review: "+strings.TrimSpace(text))
+		}
+		if d.Input.Regenerate {
+			_ = p.CommentPR(ctx, token, number, "Hammurapi agent regenerated the code: "+strings.TrimSpace(text))
 		}
 		// FTR.HMR.CMN-0008 R15: the description of an open PR stays as it is.
 		if w := checkWarnings(res); w != "" {

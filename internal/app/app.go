@@ -273,6 +273,8 @@ func (c *core) slices() *slices {
 	gs := gates.NewService(c.store, c.provider, c.authSvc, c.events, gategen.Generator{Q: c.pool}, branch)
 	gs.Changes = changes
 	gs.PreviewMaxBytes = cfg.SpecFilePreviewMaxBytes
+	cg := codegen.NewService(c.store, c.events)
+	cg.Git = c.provider // FTR.HMR.DEV-0004 R19: the comments and checks of a PR for a regeneration
 	return &slices{
 		spec:      spec,
 		changes:   changes,
@@ -281,7 +283,7 @@ func (c *core) slices() *slices {
 		features:  fs,
 		metrics:   mt,
 		discovery: discovery.NewService(c.pool, c.events),
-		codegen:   codegen.NewService(c.store, c.events),
+		codegen:   cg,
 		catalog:   &catalog.Syncer{Pool: c.pool, Git: c.provider, CatalogChanged: spec.RequestCatalog},
 	}
 }
@@ -322,6 +324,15 @@ func (c *core) toolDeps(s *slices, loadPrincipal agent.PrincipalLoader) agent.To
 				FeatureKey string    `json:"featureKey"`
 				Blocked    bool      `json:"blocked"`
 			}{r.ID, r.State, r.Position, r.FeatureKey, r.Blocked})
+			return string(b), nil
+		},
+		// FTR.HMR.DEV-0004 R20: the regeneration of the code of a service from the chat
+		RegenerateCode: func(ctx context.Context, p *domain.Principal, key, service, comment string) (string, error) {
+			r, err := s.codegen.Regenerate(ctx, p, key, service, comment)
+			if err != nil {
+				return "", err
+			}
+			b, _ := json.Marshal(r)
 			return string(b), nil
 		},
 		ReadSpecQuestions: func(ctx context.Context, p *domain.Principal, key string) (string, error) {
