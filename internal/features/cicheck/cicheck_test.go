@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/GreenOnGrey/hammurapi-core/internal/apperr"
+	"github.com/GreenOnGrey/hammurapi-core/internal/domain"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/git"
 )
 
@@ -33,6 +34,31 @@ func TestAddInclude(t *testing.T) {
 		got, ok := addInclude([]byte(tc.in), path)
 		if ok != tc.ok || (ok && string(got) != tc.want) {
 			t.Errorf("%s: %v %q", tc.name, ok, got)
+		}
+	}
+}
+
+// FTR.HMR.SPEC-0002 R8: a feature is required when its service PR is merged or it is released, and in the
+// check of its own pull request; the phase alone does not make it required.
+func TestRequired(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		phase          domain.FeaturePhase
+		merged, atHead bool
+		want           bool
+	}{
+		{"released", domain.PhaseReleased, false, false, true},
+		{"codegen, the default branch", domain.PhaseCodegen, false, false, false},
+		{"validation, another pull request", domain.PhaseValidation, false, false, false},
+		{"validation, its own pull request", domain.PhaseValidation, false, true, true},
+		{"in_release before the merge", domain.PhaseInRelease, false, false, false},
+		{"a merged pull request", domain.PhaseValidation, true, false, true},
+		{"spec", domain.PhaseSpec, false, false, false},
+		{"indexed", domain.PhaseIndexed, false, false, false},
+		{"rolled back, the PR was merged", domain.PhaseRolledBack, true, false, false},
+	} {
+		if got := required(tc.phase, tc.merged, tc.atHead); got != tc.want {
+			t.Errorf("%s: %v, want %v", tc.name, got, tc.want)
 		}
 	}
 }

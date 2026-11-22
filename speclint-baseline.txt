@@ -18,6 +18,10 @@ unknown-test-id internal/features/features/service_test.go GEN-09
 unknown-test-id internal/features/gates/service_test.go GEN-03
 unknown-test-id internal/features/specindex/parse_test.go DF-02
 unknown-test-id internal/features/specindex/parse_test.go DF-04
+unknown-test-id internal/itest/ci_check_test.go SVC-16
+unknown-test-id internal/itest/ci_check_test.go SVC-17
+unknown-test-id internal/itest/ci_check_test.go SVC-18
+unknown-test-id internal/itest/ci_check_test.go SVC-19
 unknown-test-id internal/itest/spec_trace_test.go SVC-12
 unknown-test-id internal/itest/spec_trace_test.go SVC-13
 unknown-test-id internal/itest/spec_trace_test.go SVC-14
