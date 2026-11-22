@@ -19,6 +19,7 @@ import (
 
 	"github.com/GreenOnGrey/hammurapi-core/internal/apperr"
 	"github.com/GreenOnGrey/hammurapi-core/internal/cycledata"
+	"github.com/GreenOnGrey/hammurapi-core/internal/domain"
 	"github.com/GreenOnGrey/hammurapi-core/internal/features/speccontract"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/httpx"
 	"github.com/GreenOnGrey/hammurapi-core/internal/platform/metrics"
@@ -50,25 +51,52 @@ type Case struct {
 	Services []string `json:"services"`
 }
 
-// requiredPhases need the tests in the code: code generation and later; a rolled back feature does not (tech §5, 5).
-var requiredPhases = map[string]bool{"codegen": true, "validation": true, "in_release": true, "released": true}
+// required tells whether the automated test cases of a feature must be in the checked revision (tech §3.1):
+// the code is already in the default branch of the service — its PR is merged or the feature is released — or
+// this run checks the pull request of the feature itself. Nothing is merged to the default branch during
+// development (FTR.HMR.CMN-0002 §4), so the phase alone does not make a feature required.
+func required(phase domain.FeaturePhase, merged, atHead bool) bool {
+	switch phase {
+	case domain.PhaseReleased:
+		return true
+	case domain.PhaseCodegen, domain.PhaseValidation, domain.PhaseInRelease:
+		return merged || atHead
+	}
+	return false
+}
+
+// clip keeps a query parameter within reason: the branch and the commit of a pull request are short.
+func clip(v string) string {
+	if v = strings.TrimSpace(v); len(v) > 255 {
+		return v[:255]
+	}
+	return v
+}
 
 // testCases reads the features of the service by feature_services and their test cases: the projection of the
-// qa document of the feature, from its branch while in work and from the default branch after the merge.
-func (s *Service) testCases(ctx context.Context, serviceID uuid.UUID, key string) (*TestCases, error) {
+// qa document of the feature, from its branch while in work and from the default branch after the merge. head
+// and sha name the pull request under check, empty outside a pull request.
+func (s *Service) testCases(ctx context.Context, serviceID uuid.UUID, key, head, sha string) (*TestCases, error) {
 	out := &TestCases{ContractVersion: contract.Version, Service: key, Features: []CaseFeature{}, Cases: []Case{}}
-	rows, err := s.pool.Query(ctx, `SELECT f.unique_id, f.phase::text FROM feature_services fs JOIN features f ON f.id = fs.feature_id
-		WHERE fs.service_id = $1 AND f.phase <> 'deleted' AND f.deleted_at IS NULL ORDER BY f.unique_id`, serviceID)
+	rows, err := s.pool.Query(ctx, `SELECT f.unique_id, f.phase::text,
+		EXISTS (SELECT 1 FROM pull_requests p WHERE p.feature_id = f.id AND p.service_id = $1
+			AND p.kind = 'service' AND p.state = 'merged') AS merged,
+		EXISTS (SELECT 1 FROM pull_requests p WHERE p.feature_id = f.id AND p.service_id = $1
+			AND p.kind = 'service' AND p.state <> 'closed'
+			AND (($2 <> '' AND p.head_sha = $2) OR ($3 <> '' AND p.branch = $3))) AS at_head
+		FROM feature_services fs JOIN features f ON f.id = fs.feature_id
+		WHERE fs.service_id = $1 AND f.phase <> 'deleted' AND f.deleted_at IS NULL ORDER BY f.unique_id`, serviceID, sha, head)
 	if err != nil {
 		return nil, err
 	}
 	for rows.Next() {
 		var f CaseFeature
-		if err := rows.Scan(&f.Key, &f.Phase); err != nil {
+		var merged, atHead bool
+		if err := rows.Scan(&f.Key, &f.Phase, &merged, &atHead); err != nil {
 			rows.Close()
 			return nil, err
 		}
-		f.Required = requiredPhases[f.Phase]
+		f.Required = required(domain.FeaturePhase(f.Phase), merged, atHead)
 		out.Features = append(out.Features, f)
 	}
 	rows.Close()
@@ -347,7 +375,7 @@ func (s *Service) serveTestCases(w http.ResponseWriter, r *http.Request) (result
 		}
 		svcID = services[i].id
 	}
-	out, err := s.testCases(ctx, svcID, key)
+	out, err := s.testCases(ctx, svcID, key, clip(r.URL.Query().Get("head")), clip(r.URL.Query().Get("sha")))
 	if err != nil {
 		return "error", auth, err
 	}

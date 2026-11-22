@@ -138,8 +138,10 @@ func TestCICheck(t *testing.T) {
 	for _, s := range []string{"booking", "pricing"} {
 		must(t, cd.UpsertService(ctx, &cycledata.Service{Key: s, Name: s, Repo: "fms/" + s, Source: "manual"}))
 	}
-	// SVC-06, SVC-07: features of booking in several phases with their test cases
-	for i, ph := range []string{"released", "codegen", "spec", "rolled_back"} {
+	// SVC-06, SVC-07, SVC-16…SVC-19: features of booking in several phases with their test cases
+	phases := []string{"released", "codegen", "validation", "in_release", "spec", "rolled_back"}
+	featureID := map[string]string{} // phase → the feature
+	for i, ph := range phases {
 		n := i + 1
 		key := "FTR.FMS.CAR-000" + string(rune('0'+n))
 		var fid string
@@ -148,7 +150,19 @@ func TestCICheck(t *testing.T) {
 		must(t, pool.QueryRow(ctx, `INSERT INTO feature_services (feature_id, service_id) SELECT $1, id FROM services WHERE key = 'booking' RETURNING feature_id`, fid).Scan(&fid))
 		_, err := pool.Exec(ctx, `INSERT INTO test_cases (feature_id, tc_id, level, req_ids) VALUES ($1, $2, 'I', '{R1}')`, fid, "BOOK-0"+string(rune('0'+n)))
 		must(t, err)
+		featureID[ph] = fid
 	}
+	// SVC-16, SVC-17: an open PR of codegen (its branch and head) and a merged PR of validation;
+	// SVC-19: a merged PR of a rolled back feature.
+	pr := func(phase, branch, sha, state string, number int) {
+		_, err := pool.Exec(ctx, `INSERT INTO pull_requests (repo, number, url, title, branch, kind, feature_id, service_id, by_agent, state, head_sha)
+			SELECT 'fms/booking', $1, 'http://pr', 'F', $2, 'service', $3, id, true, $4, $5 FROM services WHERE key = 'booking'`,
+			number, branch, featureID[phase], state, sha)
+		must(t, err)
+	}
+	pr("codegen", "hammurapi/FTR.FMS.CAR-0002/booking", "sha2", "open", 2)
+	pr("validation", "hammurapi/FTR.FMS.CAR-0003/booking", "sha3", "merged", 3)
+	pr("rolled_back", "hammurapi/FTR.FMS.CAR-0006/booking", "sha6", "merged", 6)
 
 	repos := &ciRepos{name: "github", files: map[string]map[string]map[string]string{
 		"org/specs": {"main": {}}, "fms/booking": {"main": {}}, "fms/pricing": {"main": {}},
@@ -160,10 +174,13 @@ func TestCICheck(t *testing.T) {
 	svc.CIRoutes(r)
 	srv := httptest.NewServer(r)
 	defer srv.Close()
-	get := func(service, token string) (int, map[string]any) {
+	getQ := func(service, token, query string) (int, map[string]any) {
 		path := "/ci/services/" + service + "/test-cases"
 		if service == "" { // FTR.HMR.SPEC-0004 tech §3.2: the catalog
 			path = "/ci/services"
+		}
+		if query != "" {
+			path += "?" + query
 		}
 		req, _ := http.NewRequest(http.MethodGet, srv.URL+path, nil)
 		if token != "" {
@@ -176,6 +193,7 @@ func TestCICheck(t *testing.T) {
 		_ = json.NewDecoder(resp.Body).Decode(&body)
 		return resp.StatusCode, body
 	}
+	get := func(service, token string) (int, map[string]any) { return getQ(service, token, "") }
 
 	owner := tu.User("owner:booking")
 	must(t, pool.QueryRow(ctx, `SELECT id FROM users WHERE username = 'olga'`).Scan(&owner.UserID))
@@ -191,9 +209,18 @@ func TestCICheck(t *testing.T) {
 		return gh.token(t, map[string]any{"iss": gh.URL, "aud": "https://hammurapi.example", "repository": repo})
 	}
 
-	// OIDC-01, SVC-06, SVC-07: the features, their phases, required from code generation on, rolled back not
+	featureRequired := func(body map[string]any, key string) bool {
+		for _, f := range body["features"].([]any) {
+			if m := f.(map[string]any); m["key"] == key {
+				return m["required"].(bool)
+			}
+		}
+		return false
+	}
+	// OIDC-01, SVC-06, SVC-07, SVC-18: released and the merged PR are required; codegen with an open PR is not,
+	// in_release before the merge is not, spec and rolled back are not.
 	code, body := get("booking", job("FMS/Booking"))
-	if code != 200 || body["contractVersion"] != contract.Version || len(body["cases"].([]any)) != 4 {
+	if code != 200 || body["contractVersion"] != contract.Version || len(body["cases"].([]any)) != 6 {
 		t.Fatalf("OIDC-01: %d %v", code, body)
 	}
 	required := map[string]bool{}
@@ -201,8 +228,20 @@ func TestCICheck(t *testing.T) {
 		m := f.(map[string]any)
 		required[m["phase"].(string)] = m["required"].(bool)
 	}
-	if !required["released"] || !required["codegen"] || required["spec"] || required["rolled_back"] {
-		t.Fatalf("SVC-07: %v", required)
+	if !required["released"] || !required["validation"] || required["codegen"] || required["in_release"] ||
+		required["spec"] || required["rolled_back"] {
+		t.Fatalf("SVC-06, SVC-07, SVC-18: %v", required)
+	}
+	// SVC-16: another pull request, and the default branch, do not make the open PR of a feature required
+	if code, body = getQ("booking", job("FMS/Booking"), "head=hammurapi/FTR.FMS.CAR-0003/booking"); code != 200 ||
+		featureRequired(body, "FTR.FMS.CAR-0002") {
+		t.Fatalf("SVC-16: %d %v", code, body)
+	}
+	// SVC-17: the pull request of the feature itself, by its branch and by its commit
+	for _, q := range []string{"head=hammurapi/FTR.FMS.CAR-0002/booking", "sha=sha2"} {
+		if code, body = getQ("booking", job("FMS/Booking"), q); code != 200 || !featureRequired(body, "FTR.FMS.CAR-0002") {
+			t.Fatalf("SVC-17 %s: %d %v", q, code, body)
+		}
 	}
 	// FTR.HMR.SPEC-0005 qa TCS-02, TCS-03: a case marked with another service is left out; a case without services stays
 	_, err = pool.Exec(ctx, `INSERT INTO test_cases (feature_id, tc_id, level, req_ids, services)
@@ -215,7 +254,7 @@ func TestCICheck(t *testing.T) {
 		m := c.(map[string]any)
 		ids[m["id"].(string)], _ = m["services"].([]any)
 	}
-	if code != 200 || len(ids) != 5 || ids["TCS-10"] == nil || ids["BOOK-02"] == nil || len(ids["BOOK-02"]) != 0 {
+	if code != 200 || len(ids) != 7 || ids["TCS-10"] == nil || ids["BOOK-02"] == nil || len(ids["BOOK-02"]) != 0 {
 		t.Fatalf("TCS-02, TCS-03: %d %v", code, ids)
 	}
 	if _, ok := ids["MIG-01"]; ok {
