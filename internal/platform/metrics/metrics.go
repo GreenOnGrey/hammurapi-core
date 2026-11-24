@@ -25,6 +25,10 @@ var (
 	KafkaLag = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "hammurapi_kafka_consumer_lag", Help: "Kafka consumer lag by topic.",
 	}, []string{"topic"})
+	// KafkaDropped: a message nothing could handle after the retries; its offset is in the log line beside the counter.
+	KafkaDropped = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "hammurapi_kafka_dropped_total", Help: "Kafka messages dropped after the retries by topic.",
+	}, []string{"topic"})
 	// Agent operator and LLM use (FTR.HMR.CMN-0004 arch §12).
 	AgentSessions = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "hammurapi_agent_sessions_active", Help: "Active Pi sessions of the agent operator by kind.",
@@ -166,7 +170,7 @@ func init() {
 	Registry.MustRegister(
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
-		HTTPRequests, HTTPDuration, GitAPIErrors, WebhookEvents, KafkaLag,
+		HTTPRequests, HTTPDuration, GitAPIErrors, WebhookEvents, KafkaLag, KafkaDropped,
 		AgentSessions, AgentProcessStarts, LLMRequests, LLMErrors, LLMTokens, LLMCost, GitProviderUp, GateTransitions,
 		SpecScanRuns, SpecScanDuration, SpecIndexIssuesOpen, SpecDocuments, SpecIndexedFeatures,
 		WorkflowRuns, WorkflowTransitionDuration, WorkflowBlocked, EffectsFailed, CodeTaskStates, CodeTaskDuration,
