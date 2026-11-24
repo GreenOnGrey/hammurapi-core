@@ -18,6 +18,11 @@ func (s *Service) Routes(r chi.Router) {
 		if err != nil {
 			return err
 		}
+		// a body above the limit is refused before the multipart reader streams it: the client used to send the whole
+		// archive to learn that it does not fit
+		if r.ContentLength > s.cfg.MaxBytes+1<<20 {
+			return apperr.TooLarge("archive_too_large", "the archive is too large").With("maxBytes", s.cfg.MaxBytes)
+		}
 		r.Body = http.MaxBytesReader(w, r.Body, s.cfg.MaxBytes+1<<20)
 		file, hdr, err := r.FormFile("file")
 		if err != nil {

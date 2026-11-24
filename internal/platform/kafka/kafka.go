@@ -129,14 +129,21 @@ func Consume(ctx context.Context, brokers []string, group, topic string, h Handl
 			return fmt.Errorf("fetch %s: %w", topic, err)
 		}
 		backoff := time.Second
-		for {
+		// the retries are bounded: a message every handler refuses held its partition forever, and the topic looked
+		// alive while its offsets stood still (the stand showed the same offset retried for minutes)
+		for attempt := 1; ; attempt++ {
 			hctx, span := telemetry.Start(ctx, "kafka.consume "+topic)
 			err := h(hctx, m.Key, m.Value)
 			span.End()
 			if err == nil {
 				break
 			}
-			slog.ErrorContext(ctx, "message handling failed, retrying", "topic", topic, "offset", m.Offset, "err", err)
+			if attempt >= 8 {
+				metrics.KafkaDropped.WithLabelValues(topic).Inc()
+				slog.ErrorContext(ctx, "message dropped after retries", "topic", topic, "offset", m.Offset, "err", err)
+				break
+			}
+			slog.ErrorContext(ctx, "message handling failed, retrying", "topic", topic, "offset", m.Offset, "attempt", attempt, "err", err)
 			select {
 			case <-ctx.Done():
 				return nil

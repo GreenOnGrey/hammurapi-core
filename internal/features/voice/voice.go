@@ -21,6 +21,10 @@ func Routes(r chi.Router, t whisper.Transcriber) {
 		if _, err := httpx.MustPrincipal(r); err != nil {
 			return err
 		}
+		// a recording above the limit is refused before the multipart reader streams it
+		if r.ContentLength > maxAudioBytes {
+			return apperr.TooLarge("audio_too_large", "the recording is too large").With("maxBytes", maxAudioBytes)
+		}
 		r.Body = http.MaxBytesReader(w, r.Body, maxAudioBytes)
 		file, hdr, err := r.FormFile("audio")
 		if err != nil {
